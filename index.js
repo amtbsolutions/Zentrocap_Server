@@ -35,6 +35,10 @@ dotenv.config({ path: './.env' });
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// ==================== UPDATED: Trust proxy for Render ====================
+app.set('trust proxy', 1); // <-- NEW: fixes X-Forwarded-For warning
+// ========================================================================
+
 // Connect to MongoDB
 connectDB();
 
@@ -63,31 +67,32 @@ app.use('/api/', limiter);
 // General middleware
 app.use(compression());
 
-// ---------- UPDATED CORS CONFIG ----------
+// ==================== UPDATED CORS CONFIG ====================
 const allowedOrigins = process.env.CLIENT_URL?.split(',') || [
   'http://localhost:5174',
   'https://zentrocap.com'
 ];
 
 const corsOptions = {
-  origin: function(origin, callback) {
+  origin: (origin, callback) => {
     if (!origin) return callback(null, true); // allow server-to-server requests
     if (allowedOrigins.includes(origin)) return callback(null, true);
+    console.warn('CORS blocked:', origin);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With']
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
-// ---------- END OF CORS UPDATE ----------
+// =============================================================
 
 app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// ---------- EMAIL CONFIGURATION USING support@zentrocap.com ----------
+// ==================== EMAIL CONFIGURATION ====================
 export const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,       // smtp.hostinger.com
   port: process.env.EMAIL_PORT,       // 465 or 587
@@ -106,7 +111,7 @@ transporter.verify((error, success) => {
     console.log('✅ Email server ready to send messages');
   }
 });
-// ---------- END EMAIL UPDATE ----------
+// =============================================================
 
 // API Routes
 app.use('/api/auth', authRoutes);
