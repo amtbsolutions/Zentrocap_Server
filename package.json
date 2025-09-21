@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "nodemon index.js",
     "start": "node index.js",
-    "build": "echo 'Server build complete'",
+    "build": "npm install --legacy-peer-deps && echo 'Server build complete'",
     "test": "jest"
   },
   "dependencies": {
