@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import { connectDB } from './utils/database.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { initGridFS } from './config/gridfs.js';
-import nodemailer from 'nodemailer'; // <-- Added for email sending
+import nodemailer from 'nodemailer';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -36,7 +36,7 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 // ==================== UPDATED: Trust proxy for Render ====================
-app.set('trust proxy', 1); // <-- NEW: fixes X-Forwarded-For warning
+app.set('trust proxy', 1); // <-- UPDATED: fixes X-Forwarded-For warning
 // ========================================================================
 
 // Connect to MongoDB
@@ -46,11 +46,13 @@ connectDB();
 initGridFS();
 
 // Security middleware
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
-}));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
 
-// Rate limiting - More lenient for development
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: process.env.NODE_ENV === 'production' ? 100 : 1000,
@@ -60,33 +62,32 @@ const limiter = rateLimit({
       return req.path === '/api/health' || req.path === '/api/test/connection';
     }
     return false;
-  }
+  },
 });
 app.use('/api/', limiter);
 
 // General middleware
 app.use(compression());
 
-// ==================== UPDATED CORS CONFIG ====================
-const allowedOrigins = process.env.CLIENT_URL?.split(',') || [
-  'http://localhost:5174',
-  'https://www.zentrocap.com'
-];
-
+// ==================== UPDATED: Regex-based CORS ====================
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // allow server-to-server requests
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (!origin) return callback(null, true); // server-to-server or Postman
+    // Allow localhost
+    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
+    // Allow www.zentrocap.com, zentrocap.com, and any subdomains
+    if (/^https:\/\/([a-z0-9-]+\.)?zentrocap\.com$/.test(origin)) return callback(null, true);
+
     console.warn('CORS blocked:', origin);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With'],
 };
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
-// =============================================================
+// ======================================================================
 
 app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
@@ -94,13 +95,13 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // ==================== EMAIL CONFIGURATION ====================
 export const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,       // smtp.hostinger.com
-  port: process.env.EMAIL_PORT,       // 465 or 587
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
   secure: process.env.EMAIL_PORT == 465, // SSL true for 465
   auth: {
-    user: process.env.EMAIL_USER,     // support@zentrocap.com
-    pass: process.env.EMAIL_PASS      // YOUR_EMAIL_PASSWORD
-  }
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
 });
 
 // Test email connection
@@ -140,7 +141,7 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
   });
 });
 
@@ -156,7 +157,7 @@ app.use(errorHandler);
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: `Route ${req.originalUrl} not found`
+    message: `Route ${req.originalUrl} not found`,
   });
 });
 
