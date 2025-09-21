@@ -93,6 +93,7 @@ if (process.env.NODE_ENV !== 'production') {
       'http://127.0.0.1:5173',
       'http://127.0.0.1:5174',
       'http://127.0.0.1:5175',
+      'https://www.zentrocap.com',
       'http://127.0.0.1:3000'
     ];
     if (!origin) return callback(null, true);
