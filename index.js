@@ -70,7 +70,7 @@ app.use(compression());
 // ==================== UPDATED CORS CONFIG ====================
 const allowedOrigins = process.env.CLIENT_URL?.split(',') || [
   'http://localhost:5174',
-  'https://zentrocap.com'
+  'https://www.zentrocap.com'
 ];
 
 const corsOptions = {
