@@ -5,6 +5,7 @@ import AdminPermission from '../../models/admin/AdminPermission.js';
 import { sendOTPEmail, generateOTP } from '../../utils/emailUtils.js';
 
 export const signup = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { fullName, email, mobile, password } = req.body;
     const exists = await Admin.findOne({ $or: [{ email }, { mobile }] });
@@ -15,17 +16,35 @@ export const signup = async (req, res) => {
     const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
     const admin = await Admin.create({ fullName, email, mobile, password: hashed, otp, otpExpiry, isVerified: false });
-    // Default permission stub
     await AdminPermission.create({ adminId: admin._id, designation: 'admin_manager', permissions: ['admin_manager'] });
 
-    await sendOTPEmail(email, otp, 'registration', fullName || 'Admin');
-    return res.status(201).json({ message: 'Signup successful. OTP sent to email.' });
+    // Fire-and-forget email dispatch
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const r = await sendOTPEmail(email, otp, 'registration', fullName || 'Admin');
+        if (!r.success) {
+          console.error('admin-signup:otp-email-failed', { email, error: r.error, elapsedMs: Date.now() - sendStart });
+        } else {
+          console.log('admin-signup:otp-email-sent', { email, messageId: r.messageId, elapsedMs: Date.now() - sendStart });
+        }
+      } catch (err) {
+        console.error('admin-signup:otp-email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
+
+    return res.status(201).json({
+      message: 'Signup successful. OTP sent to email.',
+      asyncEmail: true,
+      processingMs: Date.now() - t0
+    });
   } catch (e) {
     return res.status(500).json({ message: 'Signup failed', error: e.message });
   }
 };
 
 export const resendOtp = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email } = req.body;
     const admin = await Admin.findOne({ email });
@@ -33,14 +52,29 @@ export const resendOtp = async (req, res) => {
     const otp = generateOTP();
     admin.otp = otp; admin.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
     await admin.save();
-    await sendOTPEmail(email, otp, 'registration', admin.fullName || 'Admin');
-    return res.json({ message: 'New OTP sent to email.' });
+
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const r = await sendOTPEmail(email, otp, 'registration', admin.fullName || 'Admin');
+        if (!r.success) {
+          console.error('admin-resend-otp:email-failed', { email, error: r.error, elapsedMs: Date.now() - sendStart });
+        } else {
+          console.log('admin-resend-otp:email-sent', { email, messageId: r.messageId, elapsedMs: Date.now() - sendStart });
+        }
+      } catch (err) {
+        console.error('admin-resend-otp:email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
+
+    return res.json({ message: 'New OTP sent to email.', asyncEmail: true, processingMs: Date.now() - t0 });
   } catch (e) {
     return res.status(500).json({ message: 'Failed to resend OTP', error: e.message });
   }
 };
 
 export const login = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email, password } = req.body;
     const admin = await Admin.findOne({ email });
@@ -48,12 +82,31 @@ export const login = async (req, res) => {
     if (admin.isSuspended) return res.status(403).json({ message: 'Account suspended. Contact another administrator.' });
     const ok = await bcrypt.compare(String(password).trim(), admin.password);
     if (!ok) return res.status(400).json({ message: 'Incorrect password.' });
-    // Always require OTP verification step after login
     const otp = generateOTP();
     admin.otp = otp; admin.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
     await admin.save();
-    await sendOTPEmail(admin.email, otp, 'login', admin.fullName || 'Admin');
-    return res.json({ message: 'OTP sent to your email. Please verify to proceed.', requiresOTPVerification: true, email: admin.email });
+
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const r = await sendOTPEmail(admin.email, otp, 'login', admin.fullName || 'Admin');
+        if (!r.success) {
+          console.error('admin-login:otp-email-failed', { email: admin.email, error: r.error, elapsedMs: Date.now() - sendStart });
+        } else {
+          console.log('admin-login:otp-email-sent', { email: admin.email, messageId: r.messageId, elapsedMs: Date.now() - sendStart });
+        }
+      } catch (err) {
+        console.error('admin-login:otp-email-unhandled', { email: admin.email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
+
+    return res.json({
+      message: 'OTP sent to your email. Please verify to proceed.',
+      requiresOTPVerification: true,
+      email: admin.email,
+      asyncEmail: true,
+      processingMs: Date.now() - t0
+    });
   } catch (e) {
     return res.status(500).json({ message: 'Login failed', error: e.message });
   }
@@ -98,6 +151,7 @@ export const verifyOtp = async (req, res) => {
 };
 
 export const forgotPassword = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email } = req.body;
     const admin = await Admin.findOne({ email });
@@ -105,8 +159,22 @@ export const forgotPassword = async (req, res) => {
     const otp = generateOTP();
     admin.otp = otp; admin.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
     await admin.save();
-    await sendOTPEmail(email, otp, 'reset', admin.fullName || 'Admin');
-    return res.json({ message: 'OTP sent to email for password reset.' });
+
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const r = await sendOTPEmail(email, otp, 'reset', admin.fullName || 'Admin');
+        if (!r.success) {
+          console.error('admin-forgot-password:otp-email-failed', { email, error: r.error, elapsedMs: Date.now() - sendStart });
+        } else {
+          console.log('admin-forgot-password:otp-email-sent', { email, messageId: r.messageId, elapsedMs: Date.now() - sendStart });
+        }
+      } catch (err) {
+        console.error('admin-forgot-password:otp-email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
+
+    return res.json({ message: 'OTP sent to email for password reset.', asyncEmail: true, processingMs: Date.now() - t0 });
   } catch (e) {
     return res.status(500).json({ message: 'Failed to send OTP', error: e.message });
   }
