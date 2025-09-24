@@ -85,6 +85,7 @@ const sendTokenResponse = (partner, statusCode, res) => {
 // @route   POST /api/auth/send-otp
 // @access  Public
 export const sendRegistrationOTP = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email, name } = req.body;
 
@@ -112,19 +113,37 @@ export const sendRegistrationOTP = async (req, res) => {
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
 
-    // Send OTP email
-    const emailResult = await sendOTPEmail(email, otp, 'registration', name);
-    if (!emailResult.success) {
-      return res.status(500).json({ success: false, message: 'Failed to send OTP email. Please try again.' });
-    }
+    // Dispatch email in background so client isn't blocked by SMTP latency
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const emailResult = await sendOTPEmail(email, otp, 'registration', name);
+        if (!emailResult.success) {
+          console.error('registration:email-failed', {
+            email,
+            error: emailResult.error,
+            elapsedMs: Date.now() - sendStart
+          });
+        } else {
+          console.log('registration:otp-email-sent', {
+            email,
+            messageId: emailResult.messageId,
+            elapsedMs: Date.now() - sendStart
+          });
+        }
+      } catch (err) {
+        console.error('registration:email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
 
+    const total = Date.now() - t0;
     return res.status(200).json({
       success: true,
-      message: 'OTP sent successfully to your email address',
-      data: { email, expiresIn: '10 minutes' }
+      message: 'OTP generated and email dispatch in progress',
+      data: { email, expiresIn: '10 minutes', processingMs: total }
     });
   } catch (error) {
-    console.error('Error in sendRegistrationOTP:', error);
+    console.error('Error in sendRegistrationOTP:', { error: error.message, stack: error.stack, totalMs: Date.now() - t0 });
     return res.status(500).json({ success: false, message: 'Server error. Please try again later.' });
   }
 };
@@ -416,6 +435,7 @@ export const register = async (req, res) => {
 // @route   POST /api/auth/resend-otp
 // @access  Public
 export const resendOTP = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email } = req.body;
 
@@ -444,9 +464,11 @@ export const resendOTP = async (req, res) => {
 
     // Generate new OTP
     const otp = generateOTP();
+    const genMs = Date.now() - t0;
 
     // Delete old OTP records for this email and purpose
     await OTP.deleteMany({ email, purpose: 'registration' });
+    const afterDeleteMs = Date.now() - t0;
 
     // Create new OTP record (valid for 10 minutes for registration)
     await OTP.create({
@@ -455,20 +477,33 @@ export const resendOTP = async (req, res) => {
       purpose: 'registration',
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
+    const afterCreateMs = Date.now() - t0;
 
-    // Send OTP email (registration type)
-    const emailResult = await sendOTPEmail(email, otp, 'registration', 'User');
-    if (!emailResult.success) {
-      return res.status(500).json({ success: false, message: 'Failed to send OTP email. Please try again.' });
-    }
+    // Dispatch email asynchronously so response isn't blocked
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const emailResult = await sendOTPEmail(email, otp, 'registration', 'User');
+        if (!emailResult.success) {
+          const isTimeout = /timed? out/i.test(emailResult.error) || emailResult.error === 'EMAIL_TIMEOUT';
+          console.error('resend-registration:email-failed', { email, error: emailResult.error, isTimeout, elapsedMs: Date.now() - sendStart });
+        } else {
+          console.log('resend-registration:otp-email-sent', { email, messageId: emailResult.messageId, elapsedMs: Date.now() - sendStart });
+        }
+      } catch (err) {
+        console.error('resend-registration:email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
 
+    const totalMs = Date.now() - t0;
     return res.status(200).json({
       success: true,
-      message: 'New OTP sent successfully to your email address',
-      data: { email, expiresIn: '10 minutes' }
+      message: 'New OTP generated and email dispatch in progress',
+      data: { email, expiresIn: '10 minutes' },
+      timings: { genMs, afterDeleteMs, afterCreateMs, totalMs }
     });
   } catch (error) {
-    console.error('Error in resendOTP:', error);
+    console.error('Error in resendOTP:', { error: error.message, stack: error.stack, totalMs: Date.now() - t0 });
     return res.status(500).json({ success: false, message: 'Server error. Please try again later.' });
   }
 };
@@ -633,6 +668,7 @@ export const registerPartner = async (req, res) => {
 // @route   POST /api/auth/login
 // @access  Public
 export const login = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email, password } = req.body;
 
@@ -676,8 +712,9 @@ export const login = async (req, res) => {
       });
     }
 
-    // Generate and send OTP for login verification
-    const otpCode = generateOTP();
+  // Generate and store OTP for login verification
+  const otpCode = generateOTP();
+  const afterGenMs = Date.now() - t0;
     
     console.log('🔍 Login OTP Debug:', {
       email,
@@ -697,6 +734,7 @@ export const login = async (req, res) => {
       },
       { upsert: true, new: true }
     );
+    const afterSaveMs = Date.now() - t0;
 
     console.log('✅ OTP saved to database:', {
       id: savedOtp._id,
@@ -706,16 +744,30 @@ export const login = async (req, res) => {
       expiresAt: savedOtp.expiresAt
     });
 
-  // Send OTP email with partner name for personalized greeting
-  await sendOTPEmail(email, otpCode, 'login', partner.name || 'User');
+    // Send OTP email in background (non-blocking)
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const emailResult = await sendOTPEmail(email, otpCode, 'login', partner.name || 'User');
+        if (!emailResult.success) {
+          console.error('login:otp-email-failed', { email, error: emailResult.error, elapsedMs: Date.now() - sendStart });
+        } else {
+          console.log('login:otp-email-sent', { email, messageId: emailResult.messageId, elapsedMs: Date.now() - sendStart });
+        }
+      } catch (err) {
+        console.error('login:otp-email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
 
+    const total = Date.now() - t0;
     res.status(200).json({
       success: true,
       requiresOtp: true,
-      message: 'OTP sent to your email for verification'
+      message: 'OTP generated and email dispatch in progress',
+      timings: { afterGenMs, afterSaveMs, totalMs: total }
     });
   } catch (error) {
-    console.error('Error in login:', error);
+    console.error('Error in login:', { error: error.message, stack: error.stack, totalMs: Date.now() - t0 });
     res.status(500).json({
       success: false,
       message: 'Server Error'
@@ -826,6 +878,7 @@ export const verifyLoginOtp = async (req, res) => {
 // @route   POST /api/auth/resend-login-otp
 // @access  Public
 export const resendLoginOtp = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email } = req.body;
 
@@ -847,6 +900,7 @@ export const resendLoginOtp = async (req, res) => {
 
     // Generate new OTP
     const otpCode = generateOTP();
+    const genMs = Date.now() - t0;
     
     // Save OTP to database
     await OTP.findOneAndUpdate(
@@ -859,16 +913,32 @@ export const resendLoginOtp = async (req, res) => {
       },
       { upsert: true, new: true }
     );
+    const afterSaveMs = Date.now() - t0;
 
-  // Send OTP email with partner name for personalized greeting
-  await sendOTPEmail(email, otpCode, 'login', partner.name || 'User');
+    // Dispatch email asynchronously (non-blocking)
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const emailResult = await sendOTPEmail(email, otpCode, 'login', partner.name || 'User');
+        if (!emailResult.success) {
+          const isTimeout = /timed? out/i.test(emailResult.error) || emailResult.error === 'EMAIL_TIMEOUT';
+          console.error('resend-login:email-failed', { email, error: emailResult.error, isTimeout, elapsedMs: Date.now() - sendStart });
+        } else {
+          console.log('resend-login:otp-email-sent', { email, messageId: emailResult.messageId, elapsedMs: Date.now() - sendStart });
+        }
+      } catch (err) {
+        console.error('resend-login:email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
+      }
+    });
 
+    const totalMs = Date.now() - t0;
     res.status(200).json({
       success: true,
-      message: 'OTP resent successfully'
+      message: 'OTP regenerated and email dispatch in progress',
+      timings: { genMs, afterSaveMs, totalMs }
     });
   } catch (error) {
-    console.error('Error in resend login OTP:', error);
+    console.error('Error in resend login OTP:', { error: error.message, stack: error.stack, totalMs: Date.now() - t0 });
     res.status(500).json({
       success: false,
       message: 'Server Error'
@@ -915,6 +985,7 @@ export const getMe = async (req, res) => {
 // @route   POST /api/auth/forgot-password
 // @access  Public
 export const sendForgotPasswordOTP = async (req, res) => {
+  const t0 = Date.now();
   try {
     const { email } = req.body;
 
@@ -934,11 +1005,13 @@ export const sendForgotPasswordOTP = async (req, res) => {
       });
     }
 
-    // Generate OTP
-    const otp = generateOTP();
+  // Generate OTP
+  const otp = generateOTP();
+  const genMs = Date.now() - t0;
     
-    // Delete any existing OTPs for this email and purpose
-    await OTP.deleteMany({ email, purpose: 'password-reset' });
+  // Delete any existing OTPs for this email and purpose
+  await OTP.deleteMany({ email, purpose: 'password-reset' });
+  const afterDeleteMs = Date.now() - t0;
 
     // Create new OTP record (valid for 10 minutes)
     const otpRecord = await OTP.create({
@@ -947,28 +1020,45 @@ export const sendForgotPasswordOTP = async (req, res) => {
       purpose: 'password-reset',
       expiresAt: new Date(Date.now() + 10 * 60 * 1000)
     });
+    const afterCreateMs = Date.now() - t0;
 
-    // Send OTP email
-    const emailResult = await sendForgotPasswordOTPEmail(email, otp, partner.name);
-    
-    if (!emailResult.success) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to send OTP email. Please try again.'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Password reset OTP sent to your email address',
-      data: {
-        email,
-        expiresIn: '10 minutes'
+    // Send OTP email asynchronously
+    setImmediate(async () => {
+      const sendStart = Date.now();
+      try {
+        const emailResult = await sendForgotPasswordOTPEmail(email, otp, partner.name);
+        if (!emailResult.success) {
+          const isTimeout = /timed? out/i.test(emailResult.error) || emailResult.error === 'EMAIL_TIMEOUT';
+            console.error('forgot-password:email-failed', {
+              email,
+              error: emailResult.error,
+              isTimeout,
+              elapsedMs: Date.now() - sendStart
+            });
+        } else {
+          console.log('forgot-password:otp-sent', {
+            email,
+            messageId: emailResult.messageId,
+            elapsedMs: Date.now() - sendStart
+          });
+        }
+      } catch (err) {
+        console.error('forgot-password:email-unhandled', { email, error: err.message, elapsedMs: Date.now() - sendStart });
       }
     });
 
+    res.status(200).json({
+      success: true,
+      message: 'Password reset OTP generated and email dispatch in progress',
+      data: {
+        email,
+        expiresIn: '10 minutes'
+      },
+      timings: { genMs, afterDeleteMs, afterCreateMs, totalMs: Date.now() - t0 }
+    });
+
   } catch (error) {
-    console.error('Error in sendForgotPasswordOTP:', error);
+    console.error('Error in sendForgotPasswordOTP:', { error: error.message, stack: error.stack, totalMs: Date.now() - t0 });
     res.status(500).json({
       success: false,
       message: 'Server error. Please try again later.'
