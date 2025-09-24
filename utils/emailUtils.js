@@ -1,24 +1,39 @@
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 
-// Create nodemailer transporter
+// Create nodemailer transporter with configurable timeouts to prevent hanging requests
 const createTransporter = () => {
   const port = Number(process.env.EMAIL_PORT) || 587;
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port,
-    secure: port === 465, // true for 465, false otherwise
-    auth: {
+  const connectionTimeout = Number(process.env.EMAIL_CONNECTION_TIMEOUT || 10000); // ms to establish socket
+  const greetingTimeout = Number(process.env.EMAIL_GREETING_TIMEOUT || 7000);       // ms waiting for greeting after connection
+  const socketTimeout = Number(process.env.EMAIL_SOCKET_TIMEOUT || 15000);         // overall inactivity timeout
+
+  try {
+    return nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port,
+      secure: port === 465, // implicit TLS only for 465
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+      connectionTimeout,
+      greetingTimeout,
+      socketTimeout,
+      tls: {
+        // Allow self-signed / flexible certs; can tighten later once provider cert path stable
+        rejectUnauthorized: false
+      }
+    });
+  } catch (err) {
+    console.error('❌ Failed to create email transporter', {
+      error: err.message,
+      host: process.env.EMAIL_HOST,
+      port,
       user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-    tls: {
-      rejectUnauthorized: false
-    },
-    connectionTimeout: 180000, // 3 minutes
-    greetingTimeout: 180000,   // 3 minutes
-    socketTimeout: 180000      // 3 minutes
-  });
+    });
+    throw err;
+  }
 };
 
 // Generate OTP
@@ -350,8 +365,17 @@ export const sendGenericEmail = async ({ to, subject, html, text }) => {
     console.log(`✅ Generic email sent via SMTP -> id: ${info.messageId} to: ${to}`);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error('❌ Error sending generic email:', error.message);
-    return { success: false, error: error.message };
+    console.error('❌ Error sending generic email:', {
+      message: error.message,
+      code: error.code,
+      command: error.command,
+      host: process.env.EMAIL_HOST,
+      port: process.env.EMAIL_PORT,
+      to,
+    });
+    // Normalize timeout style errors so callers can detect quickly
+    const timeoutLike = /timed? out/i.test(error.message) || error.code === 'ETIMEDOUT';
+    return { success: false, error: timeoutLike ? 'EMAIL_TIMEOUT' : error.message, raw: error.message };
   }
 };
 
