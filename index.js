@@ -35,7 +35,7 @@ dotenv.config({ path: './.env' });
 
 const app = express();
 
-// 🔹 UPDATE: Trust the first proxy (required for X-Forwarded-For headers)
+// 🔹 UPDATE: Trust the first proxy (required for X-Forwarded-For headers and HTTPS detection)
 app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 5001;
@@ -154,6 +154,14 @@ if (process.env.NODE_ENV !== 'production') {
 app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+
+// 🔹 UPDATE: Force HTTPS redirection when behind Nginx proxy
+app.use((req, res, next) => {
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    return next();
+  }
+  return res.redirect(`https://${req.headers.host}${req.url}`);
+});
 
 // API Routes
 app.use('/api/auth', authRoutes);
