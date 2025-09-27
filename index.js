@@ -144,9 +144,10 @@ app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// 🔹 UPDATE: Safe HTTPS redirect behind Nginx (avoids redirect loop)
+// 🔹 UPDATE: Remove HTTPS redirect in Express (handled by Nginx to avoid loops)
+// Commented out because Nginx already does HTTP -> HTTPS
+/*
 app.use((req, res, next) => {
-  // Only redirect if running in production AND request is not HTTPS
   if (process.env.NODE_ENV === 'production') {
     if (!req.secure && req.headers['x-forwarded-proto'] !== 'https') {
       return res.redirect(`https://${req.headers.host}${req.url}`);
@@ -154,8 +155,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+*/
 
-// 🔹 UPDATE: Optional www → non-www redirect (if desired)
+// 🔹 UPDATE: Optional www -> non-www redirect (safe behind Nginx)
 // Uncomment if you want to normalize www to apex domain
 /*
 app.use((req, res, next) => {
