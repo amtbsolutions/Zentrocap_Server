@@ -31,8 +31,6 @@ import path from 'path';
 // Load environment variables
 dotenv.config({ path: './.env' });
 
-// 🔹 UPDATE: Quiet startup by removing noisy environment prints
-
 const app = express();
 
 // 🔹 UPDATE: Trust the first proxy (required for X-Forwarded-For headers and HTTPS detection)
@@ -40,9 +38,7 @@ app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 5001;
 
-/**
- * Build an allow-list of origins based on CLIENT_URL environment variable.
- */
+// 🔹 Function to build CORS allowed origins
 function buildAllowedOrigins() {
   const raw = process.env.CLIENT_URL || '';
   const parts = raw
@@ -85,7 +81,7 @@ app.use(helmet({
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: process.env.NODE_ENV === 'production' ? 100 : 1000,
   message: 'Too many requests from this IP, please try again later.',
   skip: (req) => {
@@ -99,6 +95,7 @@ app.use('/api/', limiter);
 
 // General middleware
 app.use(compression());
+
 if (process.env.NODE_ENV !== 'production') {
   const devCors = cors({
     origin: true,
@@ -108,14 +105,6 @@ if (process.env.NODE_ENV !== 'production') {
   });
   app.use(devCors);
   app.options('*', devCors);
-  app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Authorization,Content-Type,X-Requested-With');
-    if (req.method === 'OPTIONS') return res.sendStatus(204);
-    next();
-  });
 } else {
   const dynamicAllowed = buildAllowedOrigins();
   const localDevOrigins = [
@@ -155,13 +144,28 @@ app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// 🔹 UPDATE: Force HTTPS redirection when behind Nginx proxy
+// 🔹 UPDATE: Safe HTTPS redirect behind Nginx (avoids redirect loop)
 app.use((req, res, next) => {
-  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
-    return next();
+  // Only redirect if running in production AND request is not HTTPS
+  if (process.env.NODE_ENV === 'production') {
+    if (!req.secure && req.headers['x-forwarded-proto'] !== 'https') {
+      return res.redirect(`https://${req.headers.host}${req.url}`);
+    }
   }
-  return res.redirect(`https://${req.headers.host}${req.url}`);
+  next();
 });
+
+// 🔹 UPDATE: Optional www → non-www redirect (if desired)
+// Uncomment if you want to normalize www to apex domain
+/*
+app.use((req, res, next) => {
+  if (req.headers.host.startsWith('www.')) {
+    const hostWithoutWWW = req.headers.host.replace(/^www\./, '');
+    return res.redirect(301, `https://${hostWithoutWWW}${req.url}`);
+  }
+  next();
+});
+*/
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -205,11 +209,6 @@ app.use('*', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Server listening on http://localhost:${PORT}`);
-
-  const hasValidEmailConfig = process.env.EMAIL_USER && 
-                             process.env.EMAIL_PASS && 
-                             process.env.EMAIL_USER !== 'your-email@gmail.com' &&
-                             process.env.EMAIL_PASS !== 'your-app-password';
 
   try {
     startReferralSummaryWorker();
