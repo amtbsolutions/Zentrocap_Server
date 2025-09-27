@@ -202,6 +202,10 @@ app.get('/api/auth/ping', (req, res) => {
 
 app.use(errorHandler);
 
+app.get('/', (req, res) => {
+  res.send('✅ Zentrocap Backend is running!');
+});
+
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
