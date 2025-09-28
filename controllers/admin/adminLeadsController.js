@@ -115,7 +115,7 @@ export const createOrAssignLead = async (req, res) => {
 
 
 
-export const bulkAssignLeadsDynamic = async (req, res) => {
+export const bulkAssignLeads = async (req, res) => {
   try {
     if (!req.file?.path) {
       return res.status(400).json({ success: false, message: 'csvFile is required' });
