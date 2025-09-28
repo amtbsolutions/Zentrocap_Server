@@ -113,135 +113,115 @@ export const createOrAssignLead = async (req, res) => {
   }
 };
 
-export const bulkAssignLeads = async (req, res) => {
+
+
+export const bulkAssignLeadsDynamic = async (req, res) => {
   try {
-  if (!req.file?.path) {
-    return res.status(400).json({ success: false, message: 'csvFile is required' });
-  }
-  const json = await csv({ trim: true, ignoreEmpty: true }).fromFile(req.file.path);
-  const debug = req.query.debug === '1';
-  const rawCount = json.length;
-  const prelim = [];
-  const skipped = [];
-  const dedupe = new Set();
+    if (!req.file?.path) {
+      return res.status(400).json({ success: false, message: 'csvFile is required' });
+    }
 
-  for (let index = 0; index < json.length; index++) {
-    const row = json[index];
-    const ownerName = (row['Owner Name'] || row['ownerName'] || row['OWNER NAME'] || '').toString().trim();
-    const registrationNo = (row['Registration No'] || row['registrationNo'] || row['REGISTRATION NO'] || '').toString().trim();
-    let phone = (row['Owner Mobile Number'] || row['Owner Mobile'] || row['ownerMobileNumber'] || row['Phone'] || row['phone'] || '').toString();
-    phone = phone.replace(/[^0-9]/g, '');
-    if (phone.length === 11 && phone.startsWith('0')) phone = phone.slice(1);
-    if (!ownerName) { skipped.push({ index, registrationNo, reason: 'Missing Owner Name' }); continue; }
-    if (!registrationNo) { skipped.push({ index, ownerName, reason: 'Missing Registration No' }); continue; }
-    if (dedupe.has(registrationNo)) { skipped.push({ index, registrationNo, reason: 'Duplicate in file' }); continue; }
-    dedupe.add(registrationNo);
-    if (phone.length !== 10) { skipped.push({ index, registrationNo, reason: 'Invalid phone (need 10 digits)' }); continue; }
+    const json = await csv({ trim: true, ignoreEmpty: true }).fromFile(req.file.path);
+    const debug = req.query.debug === '1';
+    const rawCount = json.length;
+    const prelim = [];
+    const skipped = [];
+    const dedupe = new Set();
 
-    let registrationDate;
-    const rawDate = row['Registration Date'] || row['registrationDate'] || row['REGISTRATION DATE'];
-    if (rawDate) {
-      const dStr = rawDate.toString().trim();
-      if (/^\d{2}[/\-]\d{2}[/\-]\d{4}$/.test(dStr)) {
-        const parts = dStr.includes('/') ? dStr.split('/') : dStr.split('-');
-        const [dd, mm, yyyy] = parts.map(p => parseInt(p,10));
-        registrationDate = new Date(Date.UTC(yyyy, mm-1, dd));
-      } else if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
-        registrationDate = new Date(`${dStr}T00:00:00Z`);
-      } else {
-        const d = new Date(dStr);
-        if (!isNaN(d.getTime())) registrationDate = d;
+    for (let index = 0; index < json.length; index++) {
+      const row = json[index];
+
+      // Normalize keys (convert all keys to camelCase)
+      const normalizedRow = {};
+      for (const key in row) {
+        if (!row.hasOwnProperty(key)) continue;
+        const camelKey = key
+          .replace(/[\s_-]+(.)?/g, (_, c) => c ? c.toUpperCase() : '')
+          .replace(/^./, str => str.toLowerCase());
+        normalizedRow[camelKey] = row[key] !== '' ? row[key] : undefined;
       }
-    }
 
-    prelim.push({
-      registrationNo,
-      ownerName,
-      registrationDate,
-      currentAddress: row['Current Address'] || row['currentAddress'] || row['CURRENT ADDRESS'] || '',
-      engineNumber: row['Engine Number'] || row['engineNumber'] || row['ENGINE NUMBER'] || '',
-      chassisNumber: row['Chassis Number'] || row['chassisNumber'] || row['CHASSIS NUMBER'] || '',
-      vehicleMaker: row['Vehicle Maker'] || row['vehicleMaker'] || row['VEHICLE MAKER'] || '',
-      vehicleModel: row['Vehicle Model'] || row['vehicleModel'] || row['VEHICLE MODEL'] || '',
-      vehicleClass: row['Vehicle Class'] || row['vehicleClass'] || undefined,
-      vehicleCategory: row['Vehicle Category'] || row['vehicleCategory'] || undefined,
-      fuelType: row['Fuel Type'] || row['fuelType'] || undefined,
-      ladenWeight: row['Laden Weight'] ? Number(row['Laden Weight']) : undefined,
-      seatCapacity: row['Seat Capacity'] ? Number(row['Seat Capacity']) : undefined,
-      state: row['State'] || row['state'] || undefined,
-      city: row['City'] || row['city'] || undefined,
-      ownerMobileNumber: phone,
-      assignedPartnerEmail: row['Partner Email'] || row['assignedPartnerEmail'] || undefined,
-      status: 'Pending'
-    });
-  }
-
-  // Fetch existing registrations in one query
-  const regNos = prelim.map(p => p.registrationNo);
-  const existing = await AdminLead.find({ registrationNo: { $in: regNos } }, 'registrationNo');
-  const existingSet = new Set(existing.map(e => e.registrationNo));
-
-  const toInsert = prelim.filter(p => {
-    if (existingSet.has(p.registrationNo)) {
-      skipped.push({ registrationNo: p.registrationNo, reason: 'Registration already exists' });
-      return false;
-    }
-    if (!p.registrationDate || isNaN(p.registrationDate.getTime())) {
-      skipped.push({ registrationNo: p.registrationNo, reason: 'Invalid or missing registrationDate' });
-      return false;
-    }
-    return true;
-  });
-
-  let inserted = [];
-  if (toInsert.length) {
-    inserted = await AdminLead.insertMany(toInsert, { ordered: false });
-  }
-
-  if (debug) {
-    console.log(`[bulkAssignLeads] raw=${rawCount} prelim=${prelim.length} inserted=${inserted.length} skipped=${skipped.length}`);
-  }
-
-  // Create partner-facing notifications grouped by assignedPartnerEmail
-  try {
-    const countsByEmail = inserted.reduce((acc, l) => {
-      if (l.assignedPartnerEmail) {
-        const key = l.assignedPartnerEmail.trim();
-        if (key) acc[key] = (acc[key] || 0) + 1;
+      // Ensure required fields
+      if (!normalizedRow.ownerName) {
+        skipped.push({ index, reason: 'Missing ownerName' });
+        continue;
       }
-      return acc;
-    }, {});
+      if (!normalizedRow.registrationNo) {
+        skipped.push({ index, ownerName: normalizedRow.ownerName, reason: 'Missing registrationNo' });
+        continue;
+      }
+      if (dedupe.has(normalizedRow.registrationNo)) {
+        skipped.push({ index, registrationNo: normalizedRow.registrationNo, reason: 'Duplicate in file' });
+        continue;
+      }
+      dedupe.add(normalizedRow.registrationNo);
 
-    const emails = Object.keys(countsByEmail);
-    for (const email of emails) {
-      try {
-        const emailRegex = buildEmailRegex(email.trim());
-        if (!emailRegex) continue;
-        const partner = await Partner.findOne({ email: { $regex: emailRegex } }, '_id name email');
-        if (partner) {
-          await NotificationService.createAdminAssignedLeadsNotification(partner._id, countsByEmail[email], { name: req.user?.name || 'Admin' });
+      // Normalize phone
+      let phone = normalizedRow.ownerMobileNumber?.toString() || '';
+      phone = phone.replace(/[^0-9]/g, '');
+      if (phone.length === 11 && phone.startsWith('0')) phone = phone.slice(1);
+      normalizedRow.ownerMobileNumber = phone.length === 10 ? phone : undefined;
+
+      // Normalize registrationDate
+      let registrationDate;
+      if (normalizedRow.registrationDate) {
+        const dStr = normalizedRow.registrationDate.toString().trim();
+        if (/^\d{2}[/\-]\d{2}[/\-]\d{4}$/.test(dStr)) {
+          const parts = dStr.includes('/') ? dStr.split('/') : dStr.split('-');
+          const [dd, mm, yyyy] = parts.map(p => parseInt(p, 10));
+          registrationDate = new Date(Date.UTC(yyyy, mm - 1, dd));
+        } else {
+          const d = new Date(dStr);
+          if (!isNaN(d.getTime())) registrationDate = d;
         }
-      } catch (innerErr) {
-        console.error('bulkAssignLeads: failed to notify partner for email', email, innerErr);
       }
-    }
-  } catch (notifyGroupErr) {
-    console.error('bulkAssignLeads: group notification error', notifyGroupErr);
-  }
+      normalizedRow.registrationDate = registrationDate;
 
-  res.status(201).json({
-    success: true,
-    processed: rawCount,
-    prepared: prelim.length,
-    inserted: inserted.length,
-    skipped: skipped.length,
-    createdLeads: inserted,
-    ...(debug ? { skippedDetails: skipped.slice(0, 200) } : {})
-  });
+      prelim.push({
+        ...normalizedRow,
+        status: 'Pending'
+      });
+    }
+
+    // Check duplicates in DB
+    const regNos = prelim.map(p => p.registrationNo);
+    const existing = await AdminLead.find({ registrationNo: { $in: regNos } }, 'registrationNo');
+    const existingSet = new Set(existing.map(e => e.registrationNo));
+
+    const toInsert = prelim.filter(p => {
+      if (existingSet.has(p.registrationNo)) {
+        skipped.push({ registrationNo: p.registrationNo, reason: 'Registration already exists' });
+        return false;
+      }
+      if (!p.registrationDate || isNaN(p.registrationDate.getTime())) {
+        skipped.push({ registrationNo: p.registrationNo, reason: 'Invalid or missing registrationDate' });
+        return false;
+      }
+      return true;
+    });
+
+    let inserted = [];
+    if (toInsert.length) {
+      inserted = await AdminLead.insertMany(toInsert, { ordered: false });
+    }
+
+    res.status(201).json({
+      success: true,
+      processed: rawCount,
+      prepared: prelim.length,
+      inserted: inserted.length,
+      skipped: skipped.length,
+      createdLeads: inserted,
+      ...(debug ? { skippedDetails: skipped.slice(0, 200) } : {})
+    });
+
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
 };
+
+
+
 
 export const assignEarning = async (req, res) => {
   try {
@@ -304,6 +284,8 @@ export const assignEarning = async (req, res) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
+
+
 
 // Admin acknowledges or terminates a completed lead
 export const acknowledgeLeadByAdmin = async (req, res) => {
