@@ -562,7 +562,117 @@ export const registerPartner = async (req, res) => {
       password,
       
       // Company Information
+      companyName,export const registerPartner = async (req, res) => {
+  try {
+    const {
+      // Basic Information
+      name,
+      email,
+      phone,
+      password,
+      
+      // Company Information
       companyName,
+      designation,
+      companyAddress,
+      city,
+      state,
+      pincode,
+      
+      // Document Information
+      aadhaarNumber,
+      panNumber,
+      
+      // Additional Information
+      experience,
+      specialization,
+      referralCode,
+      gstNumber
+    } = req.body;
+
+    // Check if partner already exists
+    const existingPartner = await Partner.findOne({ 
+      $or: [
+        { email },
+        { phone },
+        { aadhaarNumber },
+        { panNumber }
+      ]
+    });
+
+    if (existingPartner) {
+      let message = 'Partner already exists';
+      if (existingPartner.email === email) message = 'Email already registered';
+      else if (existingPartner.phone === phone) message = 'Phone number already registered';
+      else if (existingPartner.aadhaarNumber === aadhaarNumber) message = 'Aadhaar number already registered';
+      else if (existingPartner.panNumber === panNumber) message = 'PAN number already registered';
+      
+      return res.status(400).json({
+        success: false,
+        message
+      });
+    }
+
+    // Create partner
+    const partner = await Partner.create({
+      name,
+      email,
+      phone,
+      password,
+      companyName,
+      designation,
+      companyAddress,
+      city,
+      state,
+      pincode,
+      aadhaarNumber,
+      panNumber,
+      gstNumber: gstNumber?.trim() || null, // <-- important change
+      experience,
+      specialization,
+      // Don't set referralCode here - let the Partner model generate unique one
+      status: 'pending' // Partners need approval
+    });
+
+    // Process referral if provided
+    if (referralCode) {
+      console.log('Processing referral signup with code:', referralCode);
+      await processReferralSignup(partner._id, referralCode);
+    }
+
+    // Send response (without token since they need approval)
+    res.status(201).json({
+      success: true,
+      message: 'Partner registration submitted successfully. Please wait for admin approval.',
+      data: {
+        id: partner._id,
+        name: partner.name,
+        email: partner.email,
+        phone: partner.phone,
+        companyName: partner.companyName,
+        status: partner.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in registerPartner:', error);
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({
+        success: false,
+        message: messages[0] || 'Validation Error'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
       designation,
       companyAddress,
       city,
