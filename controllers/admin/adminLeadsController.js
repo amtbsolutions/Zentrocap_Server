@@ -116,11 +116,14 @@ export const createOrAssignLead = async (req, res) => {
 export const bulkAssignLeads = async (req, res) => {
   try {
     if (!req.file?.path) {
+      console.log('No file uploaded');
       return res.status(400).json({ success: false, message: 'CSV or Excel file is required' }); // *** UPDATE: Updated message ***
     }
 
     const filePath = req.file.path;
     const fileExt = path.extname(req.file.originalname).toLowerCase(); // *** UPDATE: Get file extension ***
+    console.log(`Processing file: ${filePath} (type: ${fileExt})`); // *** UPDATE: Debug log ***
+
     const inserted = [];
     const skipped = [];
     let rows = [];
@@ -128,15 +131,18 @@ export const bulkAssignLeads = async (req, res) => {
     // *** UPDATE: Handle CSV or Excel based on file extension ***
     try {
       if (fileExt === '.csv') {
-        // Parse CSV file
+        console.log('Parsing CSV file'); // *** UPDATE: Debug log ***
         await new Promise((resolve, reject) => {
           parseFile(filePath, { headers: true, trim: true, ignoreEmpty: true })
             .on('data', (row) => rows.push(row))
-            .on('end', resolve)
+            .on('end', () => {
+              console.log(`Parsed ${rows.length} rows from CSV`); // *** UPDATE: Debug log ***
+              resolve();
+            })
             .on('error', reject);
         });
       } else if (fileExt === '.xlsx' || fileExt === '.xls') {
-        // Parse Excel file
+        console.log('Parsing Excel file'); // *** UPDATE: Debug log ***
         const workbook = XLSX.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
@@ -152,6 +158,9 @@ export const bulkAssignLeads = async (req, res) => {
             });
             return rowData;
           });
+          console.log(`Parsed ${rows.length} rows from Excel`); // *** UPDATE: Debug log ***
+        } else {
+          console.log('No data rows in Excel file'); // *** UPDATE: Debug log ***
         }
       } else {
         throw new Error('Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed');
@@ -159,12 +168,15 @@ export const bulkAssignLeads = async (req, res) => {
     } finally {
       // *** UPDATE: Clean up uploaded file ***
       if (fs.existsSync(filePath)) {
+        console.log(`Cleaning up file: ${filePath}`); // *** UPDATE: Debug log ***
         fs.unlinkSync(filePath);
       }
     }
 
+    console.log('Processing rows for database insertion'); // *** UPDATE: Debug log ***
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
+      console.log(`Processing row ${index}:`, row); // *** UPDATE: Debug log ***
       const normalizedRow = {};
       for (const key in row) {
         if (!row.hasOwnProperty(key)) continue;
@@ -176,6 +188,7 @@ export const bulkAssignLeads = async (req, res) => {
 
       // Optional validation for essential fields
       if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
+        console.log(`Skipping row ${index}: Missing ownerName or assignedPartnerEmail`); // *** UPDATE: Debug log ***
         skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
         continue;
       }
@@ -185,8 +198,10 @@ export const bulkAssignLeads = async (req, res) => {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
           normalizedRow.assignedPartnerEmail = partner.email;
+          console.log(`Row ${index}: Matched partner ${partner.email}`); // *** UPDATE: Debug log ***
         } else {
           normalizedRow.assignedPartnerEmail = null;
+          console.log(`Row ${index}: No partner found for ${normalizedRow.assignedPartnerEmail}`); // *** UPDATE: Debug log ***
         }
       }
 
@@ -200,11 +215,14 @@ export const bulkAssignLeads = async (req, res) => {
       try {
         const lead = await AdminLead.create(doc);
         inserted.push(lead);
+        console.log(`Row ${index}: Created lead with ID ${lead._id}`); // *** UPDATE: Debug log ***
       } catch (err) {
+        console.log(`Row ${index}: Failed to create lead - ${err.message}`); // *** UPDATE: Debug log ***
         skipped.push({ index, ...normalizedRow, reason: err.message });
       }
     }
 
+    console.log(`Bulk assign completed: ${inserted.length} inserted, ${skipped.length} skipped`); // *** UPDATE: Debug log ***
     res.status(201).json({
       success: true,
       inserted: inserted.length,
