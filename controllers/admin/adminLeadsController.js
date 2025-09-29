@@ -6,6 +6,15 @@ import AdminLead from '../../models/admin/AdminLead.js';
 import AdminNotification from '../../models/admin/AdminNotification.js';
 import NotificationService from '../../services/NotificationService.js';
 
+//*************************************
+
+import { parseFile } from '@fast-csv/parse';
+import XLSX from 'xlsx';
+import mongoose from 'mongoose';
+import path from 'path'; // *** UPDATE: Added for file extension checking ***
+
+
+
 // Helper to safely build a case-insensitive exact-match email regex
 const buildEmailRegex = (email) => {
   if (!email || typeof email !== 'string') return null;
@@ -105,19 +114,45 @@ export const createOrAssignLead = async (req, res) => {
 export const bulkAssignLeads = async (req, res) => {
   try {
     if (!req.file?.path) {
-      return res.status(400).json({ success: false, message: 'CSV file is required' });
+      return res.status(400).json({ success: false, message: 'CSV or Excel file is required' }); // *** UPDATE: Updated message ***
     }
 
-    const rows = [];
-    await new Promise((resolve, reject) => {
-      parseFile(req.file.path, { headers: true, trim: true, ignoreEmpty: true })
-        .on('data', (row) => rows.push(row))
-        .on('end', resolve)
-        .on('error', reject);
-    });
-
+    const filePath = req.file.path;
+    const fileExt = path.extname(req.file.originalname).toLowerCase(); // *** UPDATE: Get file extension ***
     const inserted = [];
     const skipped = [];
+    let rows = [];
+
+    // *** UPDATE: Handle CSV or Excel based on file extension ***
+    if (fileExt === '.csv') {
+      // Parse CSV file
+      await new Promise((resolve, reject) => {
+        parseFile(filePath, { headers: true, trim: true, ignoreEmpty: true })
+          .on('data', (row) => rows.push(row))
+          .on('end', resolve)
+          .on('error', reject);
+      });
+    } else if (fileExt === '.xlsx' || fileExt === '.xls') {
+      // Parse Excel file
+      const workbook = XLSX.readFile(filePath);
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
+
+      // Convert Excel rows to objects with headers
+      if (rows.length > 0) {
+        const headers = rows[0];
+        rows = rows.slice(1).map(row => {
+          const rowData = {};
+          headers.forEach((header, index) => {
+            rowData[header] = row[index] !== undefined ? row[index] : null;
+          });
+          return rowData;
+        });
+      }
+    } else {
+      return res.status(400).json({ success: false, message: 'Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed' }); // *** UPDATE: Added error for unsupported types ***
+    }
 
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
@@ -127,14 +162,16 @@ export const bulkAssignLeads = async (req, res) => {
         const camelKey = key
           .replace(/[\s_-]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
           .replace(/^./, str => str.toLowerCase());
-        normalizedRow[camelKey] = row[key] !== '' ? row[key] : null;
+        normalizedRow[camelKey] = row[key] !== '' && row[key] !== undefined ? row[key] : null;
       }
 
+      // Optional validation for essential fields
       if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
         skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
         continue;
       }
 
+      // Map to partner if email provided
       if (normalizedRow.assignedPartnerEmail) {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
@@ -144,6 +181,7 @@ export const bulkAssignLeads = async (req, res) => {
         }
       }
 
+      // Fill missing fields dynamically
       const doc = {};
       const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
       schemaFields.forEach(field => {
