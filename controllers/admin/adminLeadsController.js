@@ -135,13 +135,13 @@ export const bulkAssignLeads = async (req, res) => {
 
     const filePath = req.file.path;
     const fileExt = path.extname(req.file.originalname).toLowerCase();
-    console.log(`Processing file: ${filePath} (type: ${fileExt})`); // Debug log
+    console.log(`Processing file: ${filePath} (type: ${fileExt})`);
 
     const inserted = [];
     const skipped = [];
     let rows = [];
 
-    // *** UPDATE: Handle CSV or Excel ***
+    // Handle CSV or Excel
     try {
       if (fileExt === '.csv') {
         console.log('Parsing CSV file');
@@ -161,7 +161,6 @@ export const bulkAssignLeads = async (req, res) => {
         const worksheet = workbook.Sheets[sheetName];
         rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
 
-        // Convert Excel rows to objects with headers
         if (rows.length > 0) {
           const headers = rows[0];
           rows = rows.slice(1).map(row => {
@@ -179,63 +178,78 @@ export const bulkAssignLeads = async (req, res) => {
         throw new Error('Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed');
       }
     } finally {
-      // Clean up uploaded file
       if (fs.existsSync(filePath)) {
         console.log(`Cleaning up file: ${filePath}`);
         fs.unlinkSync(filePath);
       }
     }
 
-    // *** UPDATE: Explicit field mapping for common header variations ***
+    // Explicit header mapping
     const headerMap = {
       'owner name': 'ownerName',
       'owner_name': 'ownerName',
       'ownername': 'ownerName',
+      'Owner Name': 'ownerName', // *** UPDATE: Added exact header from logs ***
       'partner email': 'assignedPartnerEmail',
       'partner_email': 'assignedPartnerEmail',
       'assignedpartneremail': 'assignedPartnerEmail',
+      'Partner Email': 'assignedPartnerEmail', // *** UPDATE: Added exact header from logs ***
       'registration no': 'registrationNo',
       'registration_no': 'registrationNo',
       'registrationno': 'registrationNo',
+      'Registration No': 'registrationNo',
       'registration date': 'registrationDate',
       'registration_date': 'registrationDate',
       'registrationdate': 'registrationDate',
+      'Registration Date': 'registrationDate',
       'current address': 'currentAddress',
       'current_address': 'currentAddress',
       'currentaddress': 'currentAddress',
+      'Current Address': 'currentAddress',
       'engine number': 'engineNumber',
-      'engine_number': 'enginenumber',
+      'engine_number': 'engineNumber',
       'enginenumber': 'engineNumber',
+      'Engine Number': 'engineNumber',
       'chassis number': 'chassisNumber',
-      'chassis_number': 'chassisnumber',
+      'chassis_number': 'chassisNumber',
       'chassisnumber': 'chassisNumber',
+      'Chassis Number': 'chassisNumber',
       'vehicle maker': 'vehicleMaker',
-      'vehicle_maker': 'vehiclemaker',
+      'vehicle_maker': 'vehicleMaker',
       'vehiclemaker': 'vehicleMaker',
+      'Vehicle Maker': 'vehicleMaker',
       'vehicle model': 'vehicleModel',
-      'vehicle_model': 'vehiclemodel',
+      'vehicle_model': 'vehicleModel',
       'vehiclemodel': 'vehicleModel',
+      'Vehicle Model': 'vehicleModel',
       'vehicle class': 'vehicleClass',
-      'vehicle_class': 'vehicleclass',
+      'vehicle_class': 'vehicleClass',
       'vehicleclass': 'vehicleClass',
+      'Vehicle Class': 'vehicleClass',
       'vehicle category': 'vehicleCategory',
-      'vehicle_category': 'vehiclecategory',
+      'vehicle_category': 'vehicleCategory',
       'vehiclecategory': 'vehicleCategory',
+      'Vehicle Category': 'vehicleCategory',
       'fuel type': 'fuelType',
-      'fuel_type': 'fueltype',
+      'fuel_type': 'fuelType',
       'fueltype': 'fuelType',
+      'Fuel Type': 'fuelType',
       'laden weight': 'ladenWeight',
-      'laden_weight': 'ladenweight',
+      'laden_weight': 'ladenWeight',
       'ladenweight': 'ladenWeight',
+      'Laden Weight': 'ladenWeight',
       'sale amount': 'insuranceSaleAmount',
       'sale_amount': 'insuranceSaleAmount',
       'insurancesaleamount': 'insuranceSaleAmount',
+      'Sale Amount': 'insuranceSaleAmount',
       'seat capacity': 'seatCapacity',
-      'seat_capacity': 'seatcapacity',
+      'seat_capacity': 'seatCapacity',
       'seatcapacity': 'seatCapacity',
+      'Seat Capacity': 'seatCapacity',
       'owner mobile number': 'ownerMobileNumber',
-      'owner_mobile_number': 'ownermobilenumber',
-      'ownermobilenumber': 'ownerMobileNumber'
+      'owner_mobile_number': 'ownerMobileNumber',
+      'ownermobilenumber': 'ownerMobileNumber',
+      'Owner Mobile Number': 'ownerMobileNumber'
     };
 
     console.log('Processing rows for database insertion');
@@ -243,26 +257,26 @@ export const bulkAssignLeads = async (req, res) => {
       const row = rows[index];
       console.log(`Processing row ${index}:`, row);
 
-      // Normalize headers using headerMap
+      // Normalize headers
       const normalizedRow = {};
       for (const key in row) {
         if (!row.hasOwnProperty(key)) continue;
-        const lowerKey = key.toLowerCase().replace(/[\s_]+/g, ' ');
+        const lowerKey = key.trim().toLowerCase().replace(/[\s_]+/g, ' ');
         const mappedKey = headerMap[lowerKey] || key
           .replace(/[\s_-]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
           .replace(/^./, str => str.toLowerCase());
         normalizedRow[mappedKey] = row[key] !== '' && row[key] !== undefined ? row[key] : null;
       }
-      console.log(`Normalized row ${index}:`, normalizedRow); // *** UPDATE: Debug log ***
+      console.log(`Normalized row ${index}:`, normalizedRow);
 
-      // Validate required fields
+      // Skip rows missing required fields
       if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
         console.log(`Skipping row ${index}: Missing ownerName or assignedPartnerEmail`);
         skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
         continue;
       }
 
-      // Map to partner if email provided
+      // Map to partner
       if (normalizedRow.assignedPartnerEmail) {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
@@ -274,7 +288,7 @@ export const bulkAssignLeads = async (req, res) => {
         }
       }
 
-      // Fill missing fields dynamically
+      // Fill missing fields
       const doc = {};
       const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
       schemaFields.forEach(field => {
@@ -305,7 +319,6 @@ export const bulkAssignLeads = async (req, res) => {
   }
 };
 
-// ... (other controller functions unchanged: editLead, deleteLead, etc.)
 
 
 // ------------------- EDIT LEAD -------------------
