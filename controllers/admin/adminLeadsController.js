@@ -171,32 +171,6 @@ export const bulkAssignLeads = async (req, res) => {
   }
 };
 
-// ------------------- EDIT LEAD -------------------
-export const editLead = async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid lead ID' });
-    }
-
-    const updates = req.body || {};
-    const sanitizedUpdates = {};
-    const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
-    schemaFields.forEach(field => {
-      if (updates[field] !== undefined && updates[field] !== '') {
-        sanitizedUpdates[field] = updates[field];
-      }
-    });
-
-    const lead = await AdminLead.findByIdAndUpdate(id, sanitizedUpdates, { new: true });
-    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-
-    res.status(200).json({ success: true, lead });
-  } catch (err) {
-    console.error('editLead error:', err.stack);
-    res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-};
 
 // ------------------- EDIT LEAD -------------------
 export const editLead = async (req, res) => {
