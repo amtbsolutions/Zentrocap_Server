@@ -112,6 +112,11 @@ export const createOrAssignLead = async (req, res) => {
 
 
 
+// *** UPDATE: Debug import ***
+console.log('parse from @fast-csv/parse:', parse);
+
+// ... (other controller functions unchanged: getAllLeads, createOrAssignLead, etc.)
+
 // ------------------- BULK ASSIGN LEADS -------------------
 export const bulkAssignLeads = async (req, res) => {
   try {
@@ -122,7 +127,7 @@ export const bulkAssignLeads = async (req, res) => {
 
     const filePath = req.file.path;
     const fileExt = path.extname(req.file.originalname).toLowerCase();
-    console.log(`Processing file: ${filePath} (type: ${fileExt})`); // Debug log
+    console.log(`Processing file: ${filePath} (type: ${fileExt})`);
 
     const inserted = [];
     const skipped = [];
@@ -133,7 +138,7 @@ export const bulkAssignLeads = async (req, res) => {
       if (fileExt === '.csv') {
         console.log('Parsing CSV file');
         await new Promise((resolve, reject) => {
-          parseFile(filePath, { headers: true, trim: true, ignoreEmpty: true })
+          parse(filePath, { headers: true, trim: true, ignoreEmpty: true }) // *** UPDATE: Use parse instead of parseFile ***
             .on('data', (row) => rows.push(row))
             .on('end', () => {
               console.log(`Parsed ${rows.length} rows from CSV`);
@@ -173,7 +178,7 @@ export const bulkAssignLeads = async (req, res) => {
       }
     }
 
-    // *** UPDATE: Explicit field mapping for common header variations ***
+    // *** UPDATE: Explicit header mapping ***
     const headerMap = {
       'owner name': 'ownerName',
       'owner_name': 'ownerName',
@@ -230,7 +235,7 @@ export const bulkAssignLeads = async (req, res) => {
       const row = rows[index];
       console.log(`Processing row ${index}:`, row);
 
-      // Normalize headers using headerMap
+      // Normalize headers
       const normalizedRow = {};
       for (const key in row) {
         if (!row.hasOwnProperty(key)) continue;
@@ -240,7 +245,7 @@ export const bulkAssignLeads = async (req, res) => {
           .replace(/^./, str => str.toLowerCase());
         normalizedRow[mappedKey] = row[key] !== '' && row[key] !== undefined ? row[key] : null;
       }
-      console.log(`Normalized row ${index}:`, normalizedRow); // *** UPDATE: Debug log ***
+      console.log(`Normalized row ${index}:`, normalizedRow);
 
       // Validate required fields
       if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
@@ -249,7 +254,7 @@ export const bulkAssignLeads = async (req, res) => {
         continue;
       }
 
-      // Map to partner if email provided
+      // Map to partner
       if (normalizedRow.assignedPartnerEmail) {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
@@ -261,7 +266,7 @@ export const bulkAssignLeads = async (req, res) => {
         }
       }
 
-      // Fill missing fields dynamically
+      // Fill missing fields
       const doc = {};
       const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
       schemaFields.forEach(field => {
@@ -291,7 +296,6 @@ export const bulkAssignLeads = async (req, res) => {
     res.status(500).json({ success: false, message: err.message || 'Internal server error' });
   }
 };
-
 
 
 
