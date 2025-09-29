@@ -12,6 +12,7 @@ import { parseFile } from '@fast-csv/parse';
 import XLSX from 'xlsx';
 import mongoose from 'mongoose';
 import path from 'path'; // *** UPDATE: Added for file extension checking ***
+import fs from 'fs'; // *** UPDATE: Added for file cleanup ***
 
 
 
@@ -110,6 +111,7 @@ export const createOrAssignLead = async (req, res) => {
   }
 };
 
+
 // ------------------- BULK ASSIGN LEADS -------------------
 export const bulkAssignLeads = async (req, res) => {
   try {
@@ -124,34 +126,41 @@ export const bulkAssignLeads = async (req, res) => {
     let rows = [];
 
     // *** UPDATE: Handle CSV or Excel based on file extension ***
-    if (fileExt === '.csv') {
-      // Parse CSV file
-      await new Promise((resolve, reject) => {
-        parseFile(filePath, { headers: true, trim: true, ignoreEmpty: true })
-          .on('data', (row) => rows.push(row))
-          .on('end', resolve)
-          .on('error', reject);
-      });
-    } else if (fileExt === '.xlsx' || fileExt === '.xls') {
-      // Parse Excel file
-      const workbook = XLSX.readFile(filePath);
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
-
-      // Convert Excel rows to objects with headers
-      if (rows.length > 0) {
-        const headers = rows[0];
-        rows = rows.slice(1).map(row => {
-          const rowData = {};
-          headers.forEach((header, index) => {
-            rowData[header] = row[index] !== undefined ? row[index] : null;
-          });
-          return rowData;
+    try {
+      if (fileExt === '.csv') {
+        // Parse CSV file
+        await new Promise((resolve, reject) => {
+          parseFile(filePath, { headers: true, trim: true, ignoreEmpty: true })
+            .on('data', (row) => rows.push(row))
+            .on('end', resolve)
+            .on('error', reject);
         });
+      } else if (fileExt === '.xlsx' || fileExt === '.xls') {
+        // Parse Excel file
+        const workbook = XLSX.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
+
+        // Convert Excel rows to objects with headers
+        if (rows.length > 0) {
+          const headers = rows[0];
+          rows = rows.slice(1).map(row => {
+            const rowData = {};
+            headers.forEach((header, index) => {
+              rowData[header] = row[index] !== undefined ? row[index] : null;
+            });
+            return rowData;
+          });
+        }
+      } else {
+        throw new Error('Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed');
       }
-    } else {
-      return res.status(400).json({ success: false, message: 'Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed' }); // *** UPDATE: Added error for unsupported types ***
+    } finally {
+      // *** UPDATE: Clean up uploaded file ***
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
 
     for (let index = 0; index < rows.length; index++) {
@@ -205,9 +214,10 @@ export const bulkAssignLeads = async (req, res) => {
     });
   } catch (err) {
     console.error('bulkAssignLeads error:', err.stack);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+    res.status(500).json({ success: false, message: err.message || 'Internal server error' });
   }
 };
+
 
 
 // ------------------- EDIT LEAD -------------------
