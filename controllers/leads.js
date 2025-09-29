@@ -4,7 +4,7 @@ import Partner from '../models/Partner.js';
 import NotificationService from '../services/NotificationService.js';
 import { validationResult } from 'express-validator';
 import mongoose from 'mongoose';
-import { connectAdminDB, createAdminLeadModel, createAdminInsuranceLeadModel } from '../utils/adminDbConnection.js';
+// adminDbConnection removed: use consolidated AdminLead model directly where needed
 import csv from 'csv-parser';
 import { Transform } from 'stream';
 import fs from 'fs';
@@ -699,23 +699,25 @@ export const getAdminAssignedLeads = async (req, res) => {
       dateTo
     } = req.query;
 
-    // Connect to admin-dashboard database to get admin assigned leads
-    const adminConnection = connectAdminDB();
-    const AdminLead = createAdminLeadModel(adminConnection);
+    // Use AdminLead model from consolidated connection
+    const AdminLead = (await import('../models/admin/AdminLead.js')).default;
 
-    // Build filter for admin-assigned leads (match by partner ID or partner email)
-    const partnerIdStr = req.user._id?.toString();
+    // Build filter for admin-assigned leads - use assignedPartnerEmail
     const partnerEmail = req.user.email || req.user.username || null;
     const emailRegex = partnerEmail ? new RegExp(`^${partnerEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') : null;
-    const filter = {
-      $or: [
-        ...(partnerIdStr ? [{ assignedPartner: partnerIdStr }] : []),
-        ...(partnerEmail ? [{ assignedPartner: partnerEmail }] : []),
-        ...(emailRegex ? [{ assignedPartner: { $regex: emailRegex } }] : [])
-      ]
-    };
+    const filter = emailRegex ? { assignedPartnerEmail: { $regex: emailRegex } } : {};
     
-    if (status && status !== 'all') filter.status = status;
+    if (status && status !== 'all') {
+      // Map partner UI statuses to AdminLead statuses
+      const mapStatus = (s) => ({
+        'New': 'Pending',
+        'Contacted': 'Contacted',
+        'Qualified': 'Interested',
+        'Converted': 'Completed',
+        'Lost': 'Not Interested'
+      })[s] || s;
+      filter.status = mapStatus(status);
+    }
     
     // Date range filter
     if (dateFrom || dateTo) {
@@ -726,11 +728,15 @@ export const getAdminAssignedLeads = async (req, res) => {
     
     // Search functionality
     if (search) {
+      const s = String(search);
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } },
-        { city: { $regex: search, $options: 'i' } }
+        { ownerName: { $regex: s, $options: 'i' } },
+        { name: { $regex: s, $options: 'i' } },
+        { email: { $regex: s, $options: 'i' } },
+        { ownerMobileNumber: { $regex: s, $options: 'i' } },
+        { phone: { $regex: s, $options: 'i' } },
+        { city: { $regex: s, $options: 'i' } },
+        { registrationNo: { $regex: s, $options: 'i' } }
       ];
     }
 
@@ -752,35 +758,51 @@ export const getAdminAssignedLeads = async (req, res) => {
   // watcher logs suppressed
 
     // Transform leads to match expected format for frontend
-  const transformedLeads = leads.map(lead => ({
-      _id: lead._id,
-      name: lead.name,
-      email: lead.email,
-      phone: lead.phone,
-      city: lead.city,
-      state: lead.state,
-      pincode: lead.pincode,
-      leadSource: lead.leadSource || 'Other',
-      status: lead.status || 'New',
-      priority: lead.priority || 'Medium',
-      interestedProducts: lead.interestedProducts || [],
-  estimatedInvestment: (lead.investmentAmount ?? lead.budget) || 0,
-  investmentAmount: lead.investmentAmount ?? lead.budget ?? 0,
-  budget: lead.budget || 0,
-  investmentDate: lead.investmentDate || null,
-  saleAmount: lead.saleAmount || 0,
-  saleDate: lead.saleDate || null,
-  insuranceType: lead.insuranceType || '',
-      notes: Array.isArray(lead.notes) ? lead.notes : (lead.notes ? [{ content: lead.notes, createdAt: lead.createdAt }] : []),
-      assignedByAdmin: true,
-      adminAssignedBy: lead.assignedBy || 'Admin System',
-      adminAssignedAt: lead.assignedAt || lead.createdAt,
-      createdAt: lead.createdAt,
-      updatedAt: lead.updatedAt,
-      // Virtual fields for frontend compatibility
-      leadId: lead._id.toString().slice(-8).toUpperCase(),
-      daysSinceCreated: Math.floor((Date.now() - new Date(lead.createdAt)) / (1000 * 60 * 60 * 24))
-    }));
+    const mapAdminToUiStatus = (s) => ({
+      'Pending': 'New',
+      'Contacted': 'Contacted',
+      'Interested': 'Qualified',
+      'Completed': 'Converted',
+      'Not Interested': 'Lost'
+    })[s] || (s || 'New');
+    const transformedLeads = leads.map((lead) => {
+      // Prefer person-like fields; fallback to insurance-style ones
+      const name = lead.name || lead.ownerName || '';
+      const email = lead.email || '';
+      const phone = lead.phone || lead.ownerMobileNumber || '';
+      const city = lead.city || '';
+      const statusUi = mapAdminToUiStatus(lead.status);
+      const saleAmount = Number(lead.insuranceSaleAmount ?? lead.saleAmount ?? 0) || 0;
+      const saleDate = lead.saleDate || null;
+      return {
+        _id: lead._id,
+        name,
+        email,
+        phone,
+        city,
+        state: lead.state,
+        pincode: lead.pincode,
+        leadSource: lead.leadSource || 'Admin',
+        status: statusUi,
+        priority: lead.priority || 'Medium',
+        interestedProducts: Array.isArray(lead.interestedProducts) ? lead.interestedProducts : [],
+        // Keep estimated/investment fields for UI compatibility; reuse saleAmount
+        estimatedInvestment: saleAmount,
+        investmentAmount: saleAmount,
+        budget: lead.budget || 0,
+        investmentDate: saleDate,
+        saleAmount,
+        saleDate,
+        insuranceType: lead.insuranceType || '',
+        assignedByAdmin: true,
+        adminAssignedBy: lead.assignedBy || 'Admin System',
+        adminAssignedAt: lead.assignedAt || lead.createdAt,
+        createdAt: lead.createdAt,
+        updatedAt: lead.updatedAt,
+        leadId: lead._id.toString().slice(-8).toUpperCase(),
+        daysSinceCreated: Math.floor((Date.now() - new Date(lead.createdAt)) / (1000 * 60 * 60 * 24))
+      };
+    });
 
     // Calculate summary statistics
   const summaryData = await AdminLead.aggregate([
@@ -789,7 +811,7 @@ export const getAdminAssignedLeads = async (req, res) => {
         $group: {
           _id: null,
           totalLeads: { $sum: 1 },
-      totalBudget: { $sum: { $ifNull: ['$investmentAmount', '$budget'] } },
+      totalBudget: { $sum: { $ifNull: ['$insuranceSaleAmount', 0] } },
           statusBreakdown: { $push: '$status' }
         }
       }
@@ -803,9 +825,6 @@ export const getAdminAssignedLeads = async (req, res) => {
         statusStats[normalizedStatus] = (statusStats[normalizedStatus] || 0) + 1;
       });
     }
-
-    // Close admin connection
-    await adminConnection.close();
 
     res.status(200).json({
       success: true,
@@ -1066,28 +1085,17 @@ export const updateAdminAssignedLead = async (req, res) => {
 
   // watcher logs suppressed
 
-  // Connect to admin database
-  const adminConnection = connectAdminDB();
-  // Use the shared AdminLead schema/model to keep fields consistent
-  const AdminLead = createAdminLeadModel(adminConnection);
+  // Use AdminLead model directly
+  const AdminLead = (await import('../models/admin/AdminLead.js')).default;
 
-    // Verify this lead is assigned to the current partner (by ID or email)
-    const partnerIdStr = partnerId?.toString();
+    // Verify this lead is assigned to the current partner (by email)
     const partnerEmail = req.user.email || req.user.username || null;
     const emailRegex = partnerEmail ? new RegExp(`^${partnerEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') : null;
-    const existingLead = await AdminLead.findOne({
-      _id: id,
-      $or: [
-        ...(partnerIdStr ? [{ assignedPartner: partnerIdStr }] : []),
-        ...(partnerEmail ? [{ assignedPartner: partnerEmail }] : []),
-        ...(emailRegex ? [{ assignedPartner: { $regex: emailRegex } }] : [])
-      ]
-    });
+    const existingLead = await AdminLead.findOne({ _id: id, assignedPartnerEmail: { $regex: emailRegex } });
 
   // watcher logs suppressed
 
     if (!existingLead) {
-      await adminConnection.close();
       return res.status(404).json({
         success: false,
         message: 'Lead not found or not assigned to you'
@@ -1096,11 +1104,14 @@ export const updateAdminAssignedLead = async (req, res) => {
 
     // Only allow certain fields to be updated by partners
     const allowedUpdates = {
-      status: updates.status,
-      priority: updates.priority,
-      notes: updates.notes,
+      // Map partner UI statuses to AdminLead statuses
+      status: (() => {
+        if (!Object.prototype.hasOwnProperty.call(updates, 'status')) return undefined;
+        const s = updates.status;
+        return ({ 'New': 'Pending', 'Contacted': 'Contacted', 'Qualified': 'Interested', 'Converted': 'Completed', 'Lost': 'Not Interested' })[s] || s;
+      })(),
       followUpDate: updates.followUpDate,
-      // investment edits allowed for partners
+      // Harmonize investment fields into sale fields on AdminLead
       investmentAmount: undefined,
       investmentDate: undefined,
       saleAmount: undefined,
@@ -1121,7 +1132,7 @@ export const updateAdminAssignedLead = async (req, res) => {
       return undefined;
     };
 
-    // Map accepted input variants to investmentAmount/investmentDate
+    // Map accepted input variants to saleAmount/saleDate (for compatibility with AdminLead)
     const amountKeys = [
       'investmentAmount', 'InvestmentAmount', 'investment_amount',
       'estimatedInvestment', 'budget'
@@ -1130,7 +1141,7 @@ export const updateAdminAssignedLead = async (req, res) => {
       if (updates[k] !== undefined) {
         const amt = parseAmount(updates[k]);
         if (amt !== undefined) {
-          allowedUpdates.investmentAmount = amt;
+          allowedUpdates.saleAmount = amt; // virtual maps to insuranceSaleAmount
         }
         break;
       }
@@ -1146,7 +1157,7 @@ export const updateAdminAssignedLead = async (req, res) => {
       if (updates[k] !== undefined) {
         const dateVal = updates[k] ? new Date(updates[k]) : null;
         if (!isNaN(dateVal?.getTime?.())) {
-          allowedUpdates.investmentDate = dateVal;
+          allowedUpdates.saleDate = dateVal;
         }
         break;
       }
@@ -1178,9 +1189,6 @@ export const updateAdminAssignedLead = async (req, res) => {
       { $set: allowedUpdates },
       { new: true }
     );
-
-    // Close admin connection
-    await adminConnection.close();
 
     res.status(200).json({
       success: true,
