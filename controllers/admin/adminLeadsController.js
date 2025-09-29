@@ -108,14 +108,19 @@ export const bulkAssignLeads = async (req, res) => {
       return res.status(400).json({ success: false, message: 'CSV file is required' });
     }
 
-    const rows = await csv.parseFile(req.file.path, { trim: true, ignoreEmpty: true });
+    const rows = [];
+    await new Promise((resolve, reject) => {
+      parseFile(req.file.path, { headers: true, trim: true, ignoreEmpty: true }) // Updated to use parseFile
+        .on('data', (row) => rows.push(row))
+        .on('end', resolve)
+        .on('error', reject);
+    });
+
     const inserted = [];
     const skipped = [];
 
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
-
-      // Normalize keys dynamically
       const normalizedRow = {};
       for (const key in row) {
         if (!row.hasOwnProperty(key)) continue;
@@ -125,19 +130,27 @@ export const bulkAssignLeads = async (req, res) => {
         normalizedRow[camelKey] = row[key] !== '' ? row[key] : null;
       }
 
+      // Optional validation for essential fields
+      if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
+        skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
+        continue;
+      }
+
       // Map to partner if email provided
       if (normalizedRow.assignedPartnerEmail) {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
           normalizedRow.assignedPartnerEmail = partner.email;
+        } else {
+          normalizedRow.assignedPartnerEmail = null;
         }
       }
 
       // Fill missing fields dynamically
       const doc = {};
-      const schemaFields = Object.keys(AdminLead.schema.paths);
+      const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
       schemaFields.forEach(field => {
-        doc[field] = normalizedRow[field] ?? null;
+        doc[field] = normalizedRow[field] !== undefined ? normalizedRow[field] : null;
       });
 
       try {
@@ -157,6 +170,33 @@ export const bulkAssignLeads = async (req, res) => {
     });
   } catch (err) {
     console.error('bulkAssignLeads error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ------------------- EDIT LEAD -------------------
+export const editLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid lead ID' });
+    }
+
+    const updates = req.body || {};
+    const sanitizedUpdates = {};
+    const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
+    schemaFields.forEach(field => {
+      if (updates[field] !== undefined && updates[field] !== '') {
+        sanitizedUpdates[field] = updates[field];
+      }
+    });
+
+    const lead = await AdminLead.findByIdAndUpdate(id, sanitizedUpdates, { new: true });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    res.status(200).json({ success: true, lead });
+  } catch (err) {
+    console.error('editLead error:', err.stack);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
