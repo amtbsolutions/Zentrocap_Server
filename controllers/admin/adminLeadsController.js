@@ -112,37 +112,50 @@ export const createOrAssignLead = async (req, res) => {
 };
 
 
+import { parseFile } from '@fast-csv/parse'; // *** UPDATE: Ensured correct import ***
+import XLSX from 'xlsx'; // *** UPDATE: Added for Excel parsing ***
+import AdminLead from '../../models/AdminLead.js';
+import Partner from '../../models/Partner.js';
+import mongoose from 'mongoose';
+import path from 'path'; // *** UPDATE: Added for file extension checking ***
+import fs from 'fs'; // *** UPDATE: Added for file cleanup ***
+
+// ... (other controller functions unchanged: getAllLeads, createOrAssignLead, etc.)
+
+
+
+
 // ------------------- BULK ASSIGN LEADS -------------------
 export const bulkAssignLeads = async (req, res) => {
   try {
     if (!req.file?.path) {
       console.log('No file uploaded');
-      return res.status(400).json({ success: false, message: 'CSV or Excel file is required' }); // *** UPDATE: Updated message ***
+      return res.status(400).json({ success: false, message: 'CSV or Excel file is required' });
     }
 
     const filePath = req.file.path;
-    const fileExt = path.extname(req.file.originalname).toLowerCase(); // *** UPDATE: Get file extension ***
-    console.log(`Processing file: ${filePath} (type: ${fileExt})`); // *** UPDATE: Debug log ***
+    const fileExt = path.extname(req.file.originalname).toLowerCase();
+    console.log(`Processing file: ${filePath} (type: ${fileExt})`); // Debug log
 
     const inserted = [];
     const skipped = [];
     let rows = [];
 
-    // *** UPDATE: Handle CSV or Excel based on file extension ***
+    // *** UPDATE: Handle CSV or Excel ***
     try {
       if (fileExt === '.csv') {
-        console.log('Parsing CSV file'); // *** UPDATE: Debug log ***
+        console.log('Parsing CSV file');
         await new Promise((resolve, reject) => {
           parseFile(filePath, { headers: true, trim: true, ignoreEmpty: true })
             .on('data', (row) => rows.push(row))
             .on('end', () => {
-              console.log(`Parsed ${rows.length} rows from CSV`); // *** UPDATE: Debug log ***
+              console.log(`Parsed ${rows.length} rows from CSV`);
               resolve();
             })
             .on('error', reject);
         });
       } else if (fileExt === '.xlsx' || fileExt === '.xls') {
-        console.log('Parsing Excel file'); // *** UPDATE: Debug log ***
+        console.log('Parsing Excel file');
         const workbook = XLSX.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
@@ -158,37 +171,93 @@ export const bulkAssignLeads = async (req, res) => {
             });
             return rowData;
           });
-          console.log(`Parsed ${rows.length} rows from Excel`); // *** UPDATE: Debug log ***
+          console.log(`Parsed ${rows.length} rows from Excel`);
         } else {
-          console.log('No data rows in Excel file'); // *** UPDATE: Debug log ***
+          console.log('No data rows in Excel file');
         }
       } else {
         throw new Error('Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed');
       }
     } finally {
-      // *** UPDATE: Clean up uploaded file ***
+      // Clean up uploaded file
       if (fs.existsSync(filePath)) {
-        console.log(`Cleaning up file: ${filePath}`); // *** UPDATE: Debug log ***
+        console.log(`Cleaning up file: ${filePath}`);
         fs.unlinkSync(filePath);
       }
     }
 
-    console.log('Processing rows for database insertion'); // *** UPDATE: Debug log ***
+    // *** UPDATE: Explicit field mapping for common header variations ***
+    const headerMap = {
+      'owner name': 'ownerName',
+      'owner_name': 'ownerName',
+      'ownername': 'ownerName',
+      'partner email': 'assignedPartnerEmail',
+      'partner_email': 'assignedPartnerEmail',
+      'assignedpartneremail': 'assignedPartnerEmail',
+      'registration no': 'registrationNo',
+      'registration_no': 'registrationNo',
+      'registrationno': 'registrationNo',
+      'registration date': 'registrationDate',
+      'registration_date': 'registrationDate',
+      'registrationdate': 'registrationDate',
+      'current address': 'currentAddress',
+      'current_address': 'currentAddress',
+      'currentaddress': 'currentAddress',
+      'engine number': 'engineNumber',
+      'engine_number': 'enginenumber',
+      'enginenumber': 'engineNumber',
+      'chassis number': 'chassisNumber',
+      'chassis_number': 'chassisnumber',
+      'chassisnumber': 'chassisNumber',
+      'vehicle maker': 'vehicleMaker',
+      'vehicle_maker': 'vehiclemaker',
+      'vehiclemaker': 'vehicleMaker',
+      'vehicle model': 'vehicleModel',
+      'vehicle_model': 'vehiclemodel',
+      'vehiclemodel': 'vehicleModel',
+      'vehicle class': 'vehicleClass',
+      'vehicle_class': 'vehicleclass',
+      'vehicleclass': 'vehicleClass',
+      'vehicle category': 'vehicleCategory',
+      'vehicle_category': 'vehiclecategory',
+      'vehiclecategory': 'vehicleCategory',
+      'fuel type': 'fuelType',
+      'fuel_type': 'fueltype',
+      'fueltype': 'fuelType',
+      'laden weight': 'ladenWeight',
+      'laden_weight': 'ladenweight',
+      'ladenweight': 'ladenWeight',
+      'sale amount': 'insuranceSaleAmount',
+      'sale_amount': 'insuranceSaleAmount',
+      'insurancesaleamount': 'insuranceSaleAmount',
+      'seat capacity': 'seatCapacity',
+      'seat_capacity': 'seatcapacity',
+      'seatcapacity': 'seatCapacity',
+      'owner mobile number': 'ownerMobileNumber',
+      'owner_mobile_number': 'ownermobilenumber',
+      'ownermobilenumber': 'ownerMobileNumber'
+    };
+
+    console.log('Processing rows for database insertion');
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
-      console.log(`Processing row ${index}:`, row); // *** UPDATE: Debug log ***
+      console.log(`Processing row ${index}:`, row);
+
+      // Normalize headers using headerMap
       const normalizedRow = {};
       for (const key in row) {
         if (!row.hasOwnProperty(key)) continue;
-        const camelKey = key
+        const lowerKey = key.toLowerCase().replace(/[\s_]+/g, ' ');
+        const mappedKey = headerMap[lowerKey] || key
           .replace(/[\s_-]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
           .replace(/^./, str => str.toLowerCase());
-        normalizedRow[camelKey] = row[key] !== '' && row[key] !== undefined ? row[key] : null;
+        normalizedRow[mappedKey] = row[key] !== '' && row[key] !== undefined ? row[key] : null;
       }
+      console.log(`Normalized row ${index}:`, normalizedRow); // *** UPDATE: Debug log ***
 
-      // Optional validation for essential fields
+      // Validate required fields
       if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
-        console.log(`Skipping row ${index}: Missing ownerName or assignedPartnerEmail`); // *** UPDATE: Debug log ***
+        console.log(`Skipping row ${index}: Missing ownerName or assignedPartnerEmail`);
         skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
         continue;
       }
@@ -198,10 +267,10 @@ export const bulkAssignLeads = async (req, res) => {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
           normalizedRow.assignedPartnerEmail = partner.email;
-          console.log(`Row ${index}: Matched partner ${partner.email}`); // *** UPDATE: Debug log ***
+          console.log(`Row ${index}: Matched partner ${partner.email}`);
         } else {
           normalizedRow.assignedPartnerEmail = null;
-          console.log(`Row ${index}: No partner found for ${normalizedRow.assignedPartnerEmail}`); // *** UPDATE: Debug log ***
+          console.log(`Row ${index}: No partner found for ${normalizedRow.assignedPartnerEmail}`);
         }
       }
 
@@ -215,14 +284,14 @@ export const bulkAssignLeads = async (req, res) => {
       try {
         const lead = await AdminLead.create(doc);
         inserted.push(lead);
-        console.log(`Row ${index}: Created lead with ID ${lead._id}`); // *** UPDATE: Debug log ***
+        console.log(`Row ${index}: Created lead with ID ${lead._id}`);
       } catch (err) {
-        console.log(`Row ${index}: Failed to create lead - ${err.message}`); // *** UPDATE: Debug log ***
+        console.log(`Row ${index}: Failed to create lead - ${err.message}`);
         skipped.push({ index, ...normalizedRow, reason: err.message });
       }
     }
 
-    console.log(`Bulk assign completed: ${inserted.length} inserted, ${skipped.length} skipped`); // *** UPDATE: Debug log ***
+    console.log(`Bulk assign completed: ${inserted.length} inserted, ${skipped.length} skipped`);
     res.status(201).json({
       success: true,
       inserted: inserted.length,
@@ -236,6 +305,7 @@ export const bulkAssignLeads = async (req, res) => {
   }
 };
 
+// ... (other controller functions unchanged: editLead, deleteLead, etc.)
 
 
 // ------------------- EDIT LEAD -------------------
