@@ -108,7 +108,7 @@ export const bulkAssignLeads = async (req, res) => {
       return res.status(400).json({ success: false, message: 'CSV file is required' });
     }
 
-    const rows = await csv({ trim: true, ignoreEmpty: true }).fromFile(req.file.path);
+    const rows = await csv.parseFile(req.file.path, { trim: true, ignoreEmpty: true });
     const inserted = [];
     const skipped = [];
 
@@ -125,16 +125,12 @@ export const bulkAssignLeads = async (req, res) => {
         normalizedRow[camelKey] = row[key] !== '' ? row[key] : null;
       }
 
-      // Required validation
-      if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
-        skipped.push({ index, ...normalizedRow, reason: 'Missing required fields' });
-        continue;
-      }
-
-      // Map to partner if email exists
-      const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
-      if (partner) {
-        normalizedRow.assignedPartnerEmail = partner.email;
+      // Map to partner if email provided
+      if (normalizedRow.assignedPartnerEmail) {
+        const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
+        if (partner) {
+          normalizedRow.assignedPartnerEmail = partner.email;
+        }
       }
 
       // Fill missing fields dynamically
@@ -222,7 +218,6 @@ export const bulkDeleteLeads = async (req, res) => {
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
 
 
 export const assignEarning = async (req, res) => {
