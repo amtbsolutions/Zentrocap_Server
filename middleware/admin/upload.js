@@ -25,7 +25,7 @@ const fileFilter = (_req, file, cb) => {
   if (isValidMimetype || isValidExtension) {
     cb(null, true);
   } else {
-    cb(new Error('Only CSV and Excel (.xlsx, .xls) files are allowed'));
+    cb(new Error('Only CSV and Excel (.xlsx, .xls) files are allowed')); // *** UPDATE: Updated error message ***
   }
 };
 
