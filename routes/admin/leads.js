@@ -1,5 +1,5 @@
 import express from 'express';
-import { getAllLeads, createOrAssignLead, bulkAssignLeads, assignEarning, getLeadTrend, acknowledgeLeadByAdmin, assignPartnerEarning } from '../../controllers/admin/adminLeadsController.js';
+import { getAllLeads, createOrAssignLead, bulkAssignLeads, assignEarning, getLeadTrend, acknowledgeLeadByAdmin, assignPartnerEarning, editLead, deleteLead, bulkDeleteLeads } from '../../controllers/admin/adminLeadsController.js';
 import { adminUpload } from '../../middleware/admin/upload.js';
 
 const router = express.Router();
@@ -11,5 +11,8 @@ router.put('/assign-earning', assignEarning);
 router.get('/leads/trend', getLeadTrend);
 router.put('/acknowledge-lead', acknowledgeLeadByAdmin);
 router.post('/assign-partner-earning', assignPartnerEarning);
+router.post('/edit-lead', editLead);
+router.post('/delete-lead', deleteLead);
+router.post('/bulk-delete', deleteLead);
 
 export default router;
