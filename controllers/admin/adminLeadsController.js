@@ -195,6 +195,34 @@ export const deleteLead = async (req, res) => {
   }
 };
 
+// ------------------- BULK DELETE LEADS -------------------
+export const bulkDeleteLeads = async (req, res) => {
+  try {
+    const { leadIds } = req.body; // expect an array of lead IDs
+
+    if (!Array.isArray(leadIds) || leadIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'leadIds must be a non-empty array' });
+    }
+
+    // Validate IDs
+    const validIds = leadIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (!validIds.length) {
+      return res.status(400).json({ success: false, message: 'No valid lead IDs provided' });
+    }
+
+    // Delete all leads
+    const result = await AdminLead.deleteMany({ _id: { $in: validIds } });
+
+    res.status(200).json({
+      success: true,
+      message: `${result.deletedCount} lead(s) deleted successfully`
+    });
+  } catch (err) {
+    console.error('bulkDeleteLeads error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 
 
 export const assignEarning = async (req, res) => {
