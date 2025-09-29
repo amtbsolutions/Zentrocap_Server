@@ -111,18 +111,6 @@ export const createOrAssignLead = async (req, res) => {
 };
 
 
-import { parseFile } from '@fast-csv/parse'; // *** UPDATE: Ensured correct import ***
-import XLSX from 'xlsx'; // *** UPDATE: Added for Excel parsing ***
-import AdminLead from '../../models/AdminLead.js';
-import Partner from '../../models/Partner.js';
-import mongoose from 'mongoose';
-import path from 'path'; // *** UPDATE: Added for file extension checking ***
-import fs from 'fs'; // *** UPDATE: Added for file cleanup ***
-
-// ... (other controller functions unchanged: getAllLeads, createOrAssignLead, etc.)
-
-
-
 
 // ------------------- BULK ASSIGN LEADS -------------------
 export const bulkAssignLeads = async (req, res) => {
@@ -134,13 +122,13 @@ export const bulkAssignLeads = async (req, res) => {
 
     const filePath = req.file.path;
     const fileExt = path.extname(req.file.originalname).toLowerCase();
-    console.log(`Processing file: ${filePath} (type: ${fileExt})`);
+    console.log(`Processing file: ${filePath} (type: ${fileExt})`); // Debug log
 
     const inserted = [];
     const skipped = [];
     let rows = [];
 
-    // Handle CSV or Excel
+    // *** UPDATE: Handle CSV or Excel ***
     try {
       if (fileExt === '.csv') {
         console.log('Parsing CSV file');
@@ -160,6 +148,7 @@ export const bulkAssignLeads = async (req, res) => {
         const worksheet = workbook.Sheets[sheetName];
         rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
 
+        // Convert Excel rows to objects with headers
         if (rows.length > 0) {
           const headers = rows[0];
           rows = rows.slice(1).map(row => {
@@ -177,78 +166,63 @@ export const bulkAssignLeads = async (req, res) => {
         throw new Error('Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed');
       }
     } finally {
+      // Clean up uploaded file
       if (fs.existsSync(filePath)) {
         console.log(`Cleaning up file: ${filePath}`);
         fs.unlinkSync(filePath);
       }
     }
 
-    // Explicit header mapping
+    // *** UPDATE: Explicit field mapping for common header variations ***
     const headerMap = {
       'owner name': 'ownerName',
       'owner_name': 'ownerName',
       'ownername': 'ownerName',
-      'Owner Name': 'ownerName', // *** UPDATE: Added exact header from logs ***
       'partner email': 'assignedPartnerEmail',
       'partner_email': 'assignedPartnerEmail',
       'assignedpartneremail': 'assignedPartnerEmail',
-      'Partner Email': 'assignedPartnerEmail', // *** UPDATE: Added exact header from logs ***
       'registration no': 'registrationNo',
       'registration_no': 'registrationNo',
       'registrationno': 'registrationNo',
-      'Registration No': 'registrationNo',
       'registration date': 'registrationDate',
       'registration_date': 'registrationDate',
       'registrationdate': 'registrationDate',
-      'Registration Date': 'registrationDate',
       'current address': 'currentAddress',
       'current_address': 'currentAddress',
       'currentaddress': 'currentAddress',
-      'Current Address': 'currentAddress',
       'engine number': 'engineNumber',
-      'engine_number': 'engineNumber',
+      'engine_number': 'enginenumber',
       'enginenumber': 'engineNumber',
-      'Engine Number': 'engineNumber',
       'chassis number': 'chassisNumber',
-      'chassis_number': 'chassisNumber',
+      'chassis_number': 'chassisnumber',
       'chassisnumber': 'chassisNumber',
-      'Chassis Number': 'chassisNumber',
       'vehicle maker': 'vehicleMaker',
-      'vehicle_maker': 'vehicleMaker',
+      'vehicle_maker': 'vehiclemaker',
       'vehiclemaker': 'vehicleMaker',
-      'Vehicle Maker': 'vehicleMaker',
       'vehicle model': 'vehicleModel',
-      'vehicle_model': 'vehicleModel',
+      'vehicle_model': 'vehiclemodel',
       'vehiclemodel': 'vehicleModel',
-      'Vehicle Model': 'vehicleModel',
       'vehicle class': 'vehicleClass',
-      'vehicle_class': 'vehicleClass',
+      'vehicle_class': 'vehicleclass',
       'vehicleclass': 'vehicleClass',
-      'Vehicle Class': 'vehicleClass',
       'vehicle category': 'vehicleCategory',
-      'vehicle_category': 'vehicleCategory',
+      'vehicle_category': 'vehiclecategory',
       'vehiclecategory': 'vehicleCategory',
-      'Vehicle Category': 'vehicleCategory',
       'fuel type': 'fuelType',
-      'fuel_type': 'fuelType',
+      'fuel_type': 'fueltype',
       'fueltype': 'fuelType',
-      'Fuel Type': 'fuelType',
       'laden weight': 'ladenWeight',
-      'laden_weight': 'ladenWeight',
+      'laden_weight': 'ladenweight',
       'ladenweight': 'ladenWeight',
-      'Laden Weight': 'ladenWeight',
       'sale amount': 'insuranceSaleAmount',
       'sale_amount': 'insuranceSaleAmount',
       'insurancesaleamount': 'insuranceSaleAmount',
-      'Sale Amount': 'insuranceSaleAmount',
       'seat capacity': 'seatCapacity',
-      'seat_capacity': 'seatCapacity',
+      'seat_capacity': 'seatcapacity',
       'seatcapacity': 'seatCapacity',
-      'Seat Capacity': 'seatCapacity',
       'owner mobile number': 'ownerMobileNumber',
-      'owner_mobile_number': 'ownerMobileNumber',
-      'ownermobilenumber': 'ownerMobileNumber',
-      'Owner Mobile Number': 'ownerMobileNumber'
+      'owner_mobile_number': 'ownermobilenumber',
+      'ownermobilenumber': 'ownerMobileNumber'
     };
 
     console.log('Processing rows for database insertion');
@@ -256,26 +230,26 @@ export const bulkAssignLeads = async (req, res) => {
       const row = rows[index];
       console.log(`Processing row ${index}:`, row);
 
-      // Normalize headers
+      // Normalize headers using headerMap
       const normalizedRow = {};
       for (const key in row) {
         if (!row.hasOwnProperty(key)) continue;
-        const lowerKey = key.trim().toLowerCase().replace(/[\s_]+/g, ' ');
+        const lowerKey = key.toLowerCase().replace(/[\s_]+/g, ' ');
         const mappedKey = headerMap[lowerKey] || key
           .replace(/[\s_-]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
           .replace(/^./, str => str.toLowerCase());
         normalizedRow[mappedKey] = row[key] !== '' && row[key] !== undefined ? row[key] : null;
       }
-      console.log(`Normalized row ${index}:`, normalizedRow);
+      console.log(`Normalized row ${index}:`, normalizedRow); // *** UPDATE: Debug log ***
 
-      // Skip rows missing required fields
+      // Validate required fields
       if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
         console.log(`Skipping row ${index}: Missing ownerName or assignedPartnerEmail`);
         skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
         continue;
       }
 
-      // Map to partner
+      // Map to partner if email provided
       if (normalizedRow.assignedPartnerEmail) {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
@@ -287,7 +261,7 @@ export const bulkAssignLeads = async (req, res) => {
         }
       }
 
-      // Fill missing fields
+      // Fill missing fields dynamically
       const doc = {};
       const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
       schemaFields.forEach(field => {
@@ -317,6 +291,7 @@ export const bulkAssignLeads = async (req, res) => {
     res.status(500).json({ success: false, message: err.message || 'Internal server error' });
   }
 };
+
 
 
 
