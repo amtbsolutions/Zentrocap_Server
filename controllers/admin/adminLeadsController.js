@@ -110,7 +110,7 @@ export const bulkAssignLeads = async (req, res) => {
 
     const rows = [];
     await new Promise((resolve, reject) => {
-      parseFile(req.file.path, { headers: true, trim: true, ignoreEmpty: true }) // Updated to use parseFile
+      parseFile(req.file.path, { headers: true, trim: true, ignoreEmpty: true })
         .on('data', (row) => rows.push(row))
         .on('end', resolve)
         .on('error', reject);
@@ -130,13 +130,11 @@ export const bulkAssignLeads = async (req, res) => {
         normalizedRow[camelKey] = row[key] !== '' ? row[key] : null;
       }
 
-      // Optional validation for essential fields
       if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
         skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
         continue;
       }
 
-      // Map to partner if email provided
       if (normalizedRow.assignedPartnerEmail) {
         const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
         if (partner) {
@@ -146,7 +144,6 @@ export const bulkAssignLeads = async (req, res) => {
         }
       }
 
-      // Fill missing fields dynamically
       const doc = {};
       const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
       schemaFields.forEach(field => {
