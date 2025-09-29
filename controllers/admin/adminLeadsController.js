@@ -67,159 +67,133 @@ export const getAllLeads = async (_req, res) => {
   }
 };
 
+// ------------------- CREATE OR ASSIGN SINGLE LEAD -------------------
 export const createOrAssignLead = async (req, res) => {
   try {
     const leadData = req.body || {};
-    const doc = {
-      registrationNo: leadData.registrationNo,
-      registrationDate: leadData.registrationDate,
-      ownerName: leadData.ownerName,
-      currentAddress: leadData.currentAddress,
-      engineNumber: leadData.engineNumber,
-      chassisNumber: leadData.chassisNumber,
-      vehicleMaker: leadData.vehicleMaker,
-      vehicleModel: leadData.vehicleModel,
-      vehicleClass: leadData.vehicleClass,
-      vehicleCategory: leadData.vehicleCategory,
-      fuelType: leadData.fuelType,
-      ladenWeight: leadData.ladenWeight,
-      seatCapacity: leadData.seatCapacity,
-      state: leadData.state,
-      city: leadData.city,
-      ownerMobileNumber: leadData.ownerMobileNumber,
-      assignedPartnerEmail: leadData.assignedPartnerEmail || leadData.assignedPartner,
-      status: leadData.status || 'Pending'
-    };
-    const lead = await AdminLead.create(doc);
-    await AdminNotification.create({ type: 'Lead Created', message: `Lead ${lead.registrationNo || lead.ownerName} created by Admin`, createdBy: 'Admin', relatedLead: lead._id });
 
-    // Partner-facing notification if an assigned partner email is provided
-    if (doc.assignedPartnerEmail) {
-      try {
-        const emailRegex = buildEmailRegex(doc.assignedPartnerEmail.trim());
-        if (emailRegex) {
-          const partner = await Partner.findOne({ email: { $regex: emailRegex } }, '_id name email');
-          if (partner) {
-            await NotificationService.createAdminAssignedLeadsNotification(partner._id, 1, { name: req.user?.name || 'Admin' });
-          }
-        }
-      } catch (notifyErr) {
-        console.error('createOrAssignLead: failed to create partner notification', notifyErr);
-      }
+    // Required fields
+    if (!leadData.ownerName || !leadData.assignedPartnerEmail) {
+      return res.status(400).json({ success: false, message: 'ownerName and assignedPartnerEmail are required' });
     }
+
+    // Map only existing fields dynamically
+    const doc = {};
+    const schemaFields = Object.keys(AdminLead.schema.paths);
+    schemaFields.forEach(field => {
+      doc[field] = leadData[field] ?? null; // assign null if not provided
+    });
+
+    // Create lead
+    const lead = await AdminLead.create(doc);
+
+    // Map partner
+    const partner = await Partner.findOne({ email: lead.assignedPartnerEmail });
+    if (partner) {
+      // Optional: create notification for partner
+      console.log(`Partner ${partner.email} mapped for lead ${lead.ownerName}`);
+    }
+
     res.status(201).json({ success: true, lead });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+  } catch (err) {
+    console.error('createOrAssignLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
-
-
+// ------------------- BULK ASSIGN LEADS -------------------
 export const bulkAssignLeads = async (req, res) => {
   try {
     if (!req.file?.path) {
-      return res.status(400).json({ success: false, message: 'csvFile is required' });
+      return res.status(400).json({ success: false, message: 'CSV file is required' });
     }
 
-    const json = await csv({ trim: true, ignoreEmpty: true }).fromFile(req.file.path);
-    const debug = req.query.debug === '1';
-    const rawCount = json.length;
-    const prelim = [];
+    const rows = await csv({ trim: true, ignoreEmpty: true }).fromFile(req.file.path);
+    const inserted = [];
     const skipped = [];
-    const dedupe = new Set();
 
-    for (let index = 0; index < json.length; index++) {
-      const row = json[index];
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
 
-      // Normalize keys (convert all keys to camelCase)
+      // Normalize keys dynamically
       const normalizedRow = {};
       for (const key in row) {
         if (!row.hasOwnProperty(key)) continue;
         const camelKey = key
-          .replace(/[\s_-]+(.)?/g, (_, c) => c ? c.toUpperCase() : '')
+          .replace(/[\s_-]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
           .replace(/^./, str => str.toLowerCase());
-        normalizedRow[camelKey] = row[key] !== '' ? row[key] : undefined;
+        normalizedRow[camelKey] = row[key] !== '' ? row[key] : null;
       }
 
-      // Ensure required fields
-      if (!normalizedRow.ownerName) {
-        skipped.push({ index, reason: 'Missing ownerName' });
+      // Required validation
+      if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
+        skipped.push({ index, ...normalizedRow, reason: 'Missing required fields' });
         continue;
       }
-      if (!normalizedRow.registrationNo) {
-        skipped.push({ index, ownerName: normalizedRow.ownerName, reason: 'Missing registrationNo' });
-        continue;
-      }
-      if (dedupe.has(normalizedRow.registrationNo)) {
-        skipped.push({ index, registrationNo: normalizedRow.registrationNo, reason: 'Duplicate in file' });
-        continue;
-      }
-      dedupe.add(normalizedRow.registrationNo);
 
-      // Normalize phone
-      let phone = normalizedRow.ownerMobileNumber?.toString() || '';
-      phone = phone.replace(/[^0-9]/g, '');
-      if (phone.length === 11 && phone.startsWith('0')) phone = phone.slice(1);
-      normalizedRow.ownerMobileNumber = phone.length === 10 ? phone : undefined;
-
-      // Normalize registrationDate
-      let registrationDate;
-      if (normalizedRow.registrationDate) {
-        const dStr = normalizedRow.registrationDate.toString().trim();
-        if (/^\d{2}[/\-]\d{2}[/\-]\d{4}$/.test(dStr)) {
-          const parts = dStr.includes('/') ? dStr.split('/') : dStr.split('-');
-          const [dd, mm, yyyy] = parts.map(p => parseInt(p, 10));
-          registrationDate = new Date(Date.UTC(yyyy, mm - 1, dd));
-        } else {
-          const d = new Date(dStr);
-          if (!isNaN(d.getTime())) registrationDate = d;
-        }
+      // Map to partner if email exists
+      const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
+      if (partner) {
+        normalizedRow.assignedPartnerEmail = partner.email;
       }
-      normalizedRow.registrationDate = registrationDate;
 
-      prelim.push({
-        ...normalizedRow,
-        status: 'Pending'
+      // Fill missing fields dynamically
+      const doc = {};
+      const schemaFields = Object.keys(AdminLead.schema.paths);
+      schemaFields.forEach(field => {
+        doc[field] = normalizedRow[field] ?? null;
       });
-    }
 
-    // Check duplicates in DB
-    const regNos = prelim.map(p => p.registrationNo);
-    const existing = await AdminLead.find({ registrationNo: { $in: regNos } }, 'registrationNo');
-    const existingSet = new Set(existing.map(e => e.registrationNo));
-
-    const toInsert = prelim.filter(p => {
-      if (existingSet.has(p.registrationNo)) {
-        skipped.push({ registrationNo: p.registrationNo, reason: 'Registration already exists' });
-        return false;
+      try {
+        const lead = await AdminLead.create(doc);
+        inserted.push(lead);
+      } catch (err) {
+        skipped.push({ index, ...normalizedRow, reason: err.message });
       }
-      if (!p.registrationDate || isNaN(p.registrationDate.getTime())) {
-        skipped.push({ registrationNo: p.registrationNo, reason: 'Invalid or missing registrationDate' });
-        return false;
-      }
-      return true;
-    });
-
-    let inserted = [];
-    if (toInsert.length) {
-      inserted = await AdminLead.insertMany(toInsert, { ordered: false });
     }
 
     res.status(201).json({
       success: true,
-      processed: rawCount,
-      prepared: prelim.length,
       inserted: inserted.length,
       skipped: skipped.length,
       createdLeads: inserted,
-      ...(debug ? { skippedDetails: skipped.slice(0, 200) } : {})
+      skippedDetails: skipped.slice(0, 200)
     });
-
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+  } catch (err) {
+    console.error('bulkAssignLeads error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
+// ------------------- EDIT LEAD -------------------
+export const editLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const lead = await AdminLead.findByIdAndUpdate(id, updates, { new: true });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    res.status(200).json({ success: true, lead });
+  } catch (err) {
+    console.error('editLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ------------------- DELETE LEAD -------------------
+export const deleteLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const lead = await AdminLead.findByIdAndDelete(id);
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    res.status(200).json({ success: true, message: 'Lead deleted successfully' });
+  } catch (err) {
+    console.error('deleteLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
 
 
 
