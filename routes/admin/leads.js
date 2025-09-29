@@ -11,8 +11,8 @@ router.put('/assign-earning', assignEarning);
 router.get('/leads/trend', getLeadTrend);
 router.put('/acknowledge-lead', acknowledgeLeadByAdmin);
 router.post('/assign-partner-earning', assignPartnerEarning);
-router.post('/edit-lead', editLead);
-router.post('/delete-lead', deleteLead);
+router.post('/edit-lead/:id', editLead);
+router.post('/delete-lead/:id', deleteLead);
 router.post('/bulk-delete', deleteLead);
 
 export default router;
