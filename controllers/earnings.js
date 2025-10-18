@@ -374,11 +374,40 @@ export const getPaymentHistory = async (req, res) => {
 
     // Get payments with pagination
     const payments = await Payment.find(filter)
-      .populate('earningIds', 'commissionEarned description')
+      .populate('earningIds', 'commissionEarned metadata')
       .sort({ paymentDate: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
+
+    // Enrich payments: compute TDS from earnings metadata if missing
+    const enrichedPayments = payments.map(p => {
+      const hasTds = p?.taxDeduction && typeof p.taxDeduction.tdsAmount === 'number' && !isNaN(p.taxDeduction.tdsAmount);
+      if (hasTds) return p;
+      const earnings = Array.isArray(p?.earningIds) ? p.earningIds : [];
+      const tdsFromEarnings = earnings.reduce((sum, e) => {
+        const v = Number(e?.metadata?.tdsAmount);
+        return sum + (Number.isFinite(v) ? v : 0);
+      }, 0);
+      const updated = { ...p };
+      if (!updated.taxDeduction) updated.taxDeduction = {};
+      if (tdsFromEarnings > 0) {
+        updated.taxDeduction.tdsAmount = tdsFromEarnings;
+      } else if (typeof updated.amount === 'number') {
+        // Fallback: if earnings carried tdsPercent, derive from average percent; else leave 0
+        const percList = earnings.map(e => Number(e?.metadata?.tdsPercent)).filter(n => Number.isFinite(n) && n > 0);
+        if (percList.length > 0) {
+          const avgPerc = percList.reduce((a,c)=>a+c,0) / percList.length;
+          const est = Math.round((avgPerc / 100) * Number(updated.amount));
+          if (est > 0) updated.taxDeduction.tdsAmount = est;
+        } else {
+          // As a last fallback, assume default 10%
+          const estDefault = Math.round(0.10 * Number(updated.amount));
+          if (estDefault > 0) updated.taxDeduction.tdsAmount = estDefault;
+        }
+      }
+      return updated;
+    });
 
   // console.log(`Found ${payments.length} payments`);
 
@@ -401,7 +430,7 @@ export const getPaymentHistory = async (req, res) => {
     res.json({
       success: true,
       data: {
-        payments,
+  payments: enrichedPayments,
         summary,
         pagination: {
           currentPage: parseInt(page),
