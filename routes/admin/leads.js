@@ -1,5 +1,5 @@
 import express from 'express';
-import { getAllLeads, createOrAssignLead, bulkAssignLeads, assignEarning, getLeadTrend, acknowledgeLeadByAdmin, assignPartnerEarning, editLead, deleteLead, bulkDeleteLeads } from '../../controllers/admin/adminLeadsController.js';
+import { getAllLeads, createOrAssignLead, bulkAssignLeads, assignEarning, getLeadTrend, acknowledgeLeadByAdmin, assignPartnerEarning, editLead, deleteLead } from '../../controllers/admin/adminLeadsController.js';
 import { adminUpload } from '../../middleware/admin/upload.js';
 
 const router = express.Router();
