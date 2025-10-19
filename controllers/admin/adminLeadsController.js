@@ -6,6 +6,15 @@ import AdminLead from '../../models/admin/AdminLead.js';
 import AdminNotification from '../../models/admin/AdminNotification.js';
 import NotificationService from '../../services/NotificationService.js';
 
+//*************************************
+import { parse } from '@fast-csv/parse';
+import XLSX from 'xlsx';
+import mongoose from 'mongoose';
+import path from 'path'; // *** UPDATE: Added for file extension checking ***
+import fs from 'fs'; // *** UPDATE: Added for file cleanup ***
+
+
+
 // Helper to safely build a case-insensitive exact-match email regex
 const buildEmailRegex = (email) => {
   if (!email || typeof email !== 'string') return null;
@@ -67,185 +76,291 @@ export const getAllLeads = async (_req, res) => {
   }
 };
 
+// ------------------- CREATE OR ASSIGN SINGLE LEAD -------------------
 export const createOrAssignLead = async (req, res) => {
   try {
     const leadData = req.body || {};
-    const doc = {
-      registrationNo: leadData.registrationNo,
-      registrationDate: leadData.registrationDate,
-      ownerName: leadData.ownerName,
-      currentAddress: leadData.currentAddress,
-      engineNumber: leadData.engineNumber,
-      chassisNumber: leadData.chassisNumber,
-      vehicleMaker: leadData.vehicleMaker,
-      vehicleModel: leadData.vehicleModel,
-      vehicleClass: leadData.vehicleClass,
-      vehicleCategory: leadData.vehicleCategory,
-      fuelType: leadData.fuelType,
-      ladenWeight: leadData.ladenWeight,
-      seatCapacity: leadData.seatCapacity,
-      state: leadData.state,
-      city: leadData.city,
-      ownerMobileNumber: leadData.ownerMobileNumber,
-      assignedPartnerEmail: leadData.assignedPartnerEmail || leadData.assignedPartner,
-      status: leadData.status || 'Pending'
-    };
-    const lead = await AdminLead.create(doc);
-    await AdminNotification.create({ type: 'Lead Created', message: `Lead ${lead.registrationNo || lead.ownerName} created by Admin`, createdBy: 'Admin', relatedLead: lead._id });
 
-    // Partner-facing notification if an assigned partner email is provided
-    if (doc.assignedPartnerEmail) {
-      try {
-        const emailRegex = buildEmailRegex(doc.assignedPartnerEmail.trim());
-        if (emailRegex) {
-          const partner = await Partner.findOne({ email: { $regex: emailRegex } }, '_id name email');
-          if (partner) {
-            await NotificationService.createAdminAssignedLeadsNotification(partner._id, 1, { name: req.user?.name || 'Admin' });
-          }
-        }
-      } catch (notifyErr) {
-        console.error('createOrAssignLead: failed to create partner notification', notifyErr);
-      }
+    // Required fields
+    if (!leadData.ownerName || !leadData.assignedPartnerEmail) {
+      return res.status(400).json({ success: false, message: 'ownerName and assignedPartnerEmail are required' });
     }
+
+    // Map only existing fields dynamically
+    const doc = {};
+    const schemaFields = Object.keys(AdminLead.schema.paths);
+    schemaFields.forEach(field => {
+      doc[field] = leadData[field] ?? null; // assign null if not provided
+    });
+
+    // Create lead
+    const lead = await AdminLead.create(doc);
+
+    // Map partner
+    const partner = await Partner.findOne({ email: lead.assignedPartnerEmail });
+    if (partner) {
+      // Optional: create notification for partner
+      console.log(`Partner ${partner.email} mapped for lead ${lead.ownerName}`);
+    }
+
     res.status(201).json({ success: true, lead });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+  } catch (err) {
+    console.error('createOrAssignLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 
+
+
+// *** UPDATE: Debug import ***
+console.log('parse from @fast-csv/parse:', parse);
+
+// ... (other controller functions unchanged: getAllLeads, createOrAssignLead, etc.)
+
+// ------------------- BULK ASSIGN LEADS -------------------
 export const bulkAssignLeads = async (req, res) => {
   try {
-  if (!req.file?.path) {
-    return res.status(400).json({ success: false, message: 'csvFile is required' });
-  }
-  const json = await csv({ trim: true, ignoreEmpty: true }).fromFile(req.file.path);
-  const debug = req.query.debug === '1';
-  const rawCount = json.length;
-  const prelim = [];
-  const skipped = [];
-  const dedupe = new Set();
-
-  for (let index = 0; index < json.length; index++) {
-    const row = json[index];
-    const ownerName = (row['Owner Name'] || row['ownerName'] || row['OWNER NAME'] || '').toString().trim();
-    const registrationNo = (row['Registration No'] || row['registrationNo'] || row['REGISTRATION NO'] || '').toString().trim();
-    let phone = (row['Owner Mobile Number'] || row['Owner Mobile'] || row['ownerMobileNumber'] || row['Phone'] || row['phone'] || '').toString();
-    phone = phone.replace(/[^0-9]/g, '');
-    if (phone.length === 11 && phone.startsWith('0')) phone = phone.slice(1);
-    if (!ownerName) { skipped.push({ index, registrationNo, reason: 'Missing Owner Name' }); continue; }
-    if (!registrationNo) { skipped.push({ index, ownerName, reason: 'Missing Registration No' }); continue; }
-    if (dedupe.has(registrationNo)) { skipped.push({ index, registrationNo, reason: 'Duplicate in file' }); continue; }
-    dedupe.add(registrationNo);
-    if (phone.length !== 10) { skipped.push({ index, registrationNo, reason: 'Invalid phone (need 10 digits)' }); continue; }
-
-    let registrationDate;
-    const rawDate = row['Registration Date'] || row['registrationDate'] || row['REGISTRATION DATE'];
-    if (rawDate) {
-      const dStr = rawDate.toString().trim();
-      if (/^\d{2}[/\-]\d{2}[/\-]\d{4}$/.test(dStr)) {
-        const parts = dStr.includes('/') ? dStr.split('/') : dStr.split('-');
-        const [dd, mm, yyyy] = parts.map(p => parseInt(p,10));
-        registrationDate = new Date(Date.UTC(yyyy, mm-1, dd));
-      } else if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
-        registrationDate = new Date(`${dStr}T00:00:00Z`);
-      } else {
-        const d = new Date(dStr);
-        if (!isNaN(d.getTime())) registrationDate = d;
-      }
+    if (!req.file?.path) {
+      console.log('No file uploaded');
+      return res.status(400).json({ success: false, message: 'CSV or Excel file is required' });
     }
 
-    prelim.push({
-      registrationNo,
-      ownerName,
-      registrationDate,
-      currentAddress: row['Current Address'] || row['currentAddress'] || row['CURRENT ADDRESS'] || '',
-      engineNumber: row['Engine Number'] || row['engineNumber'] || row['ENGINE NUMBER'] || '',
-      chassisNumber: row['Chassis Number'] || row['chassisNumber'] || row['CHASSIS NUMBER'] || '',
-      vehicleMaker: row['Vehicle Maker'] || row['vehicleMaker'] || row['VEHICLE MAKER'] || '',
-      vehicleModel: row['Vehicle Model'] || row['vehicleModel'] || row['VEHICLE MODEL'] || '',
-      vehicleClass: row['Vehicle Class'] || row['vehicleClass'] || undefined,
-      vehicleCategory: row['Vehicle Category'] || row['vehicleCategory'] || undefined,
-      fuelType: row['Fuel Type'] || row['fuelType'] || undefined,
-      ladenWeight: row['Laden Weight'] ? Number(row['Laden Weight']) : undefined,
-      seatCapacity: row['Seat Capacity'] ? Number(row['Seat Capacity']) : undefined,
-      state: row['State'] || row['state'] || undefined,
-      city: row['City'] || row['city'] || undefined,
-      ownerMobileNumber: phone,
-      assignedPartnerEmail: row['Partner Email'] || row['assignedPartnerEmail'] || undefined,
-      status: 'Pending'
-    });
-  }
+    const filePath = req.file.path;
+    const fileExt = path.extname(req.file.originalname).toLowerCase();
+    console.log(`Processing file: ${filePath} (type: ${fileExt})`);
 
-  // Fetch existing registrations in one query
-  const regNos = prelim.map(p => p.registrationNo);
-  const existing = await AdminLead.find({ registrationNo: { $in: regNos } }, 'registrationNo');
-  const existingSet = new Set(existing.map(e => e.registrationNo));
+    const inserted = [];
+    const skipped = [];
+    let rows = [];
 
-  const toInsert = prelim.filter(p => {
-    if (existingSet.has(p.registrationNo)) {
-      skipped.push({ registrationNo: p.registrationNo, reason: 'Registration already exists' });
-      return false;
-    }
-    if (!p.registrationDate || isNaN(p.registrationDate.getTime())) {
-      skipped.push({ registrationNo: p.registrationNo, reason: 'Invalid or missing registrationDate' });
-      return false;
-    }
-    return true;
-  });
+    // *** UPDATE: Handle CSV or Excel ***
+    try {
+      if (fileExt === '.csv') {
+        console.log('Parsing CSV file');
+        await new Promise((resolve, reject) => {
+          parse(filePath, { headers: true, trim: true, ignoreEmpty: true }) // *** UPDATE: Use parse instead of parseFile ***
+            .on('data', (row) => rows.push(row))
+            .on('end', () => {
+              console.log(`Parsed ${rows.length} rows from CSV`);
+              resolve();
+            })
+            .on('error', reject);
+        });
+      } else if (fileExt === '.xlsx' || fileExt === '.xls') {
+        console.log('Parsing Excel file');
+        const workbook = XLSX.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null });
 
-  let inserted = [];
-  if (toInsert.length) {
-    inserted = await AdminLead.insertMany(toInsert, { ordered: false });
-  }
-
-  if (debug) {
-    console.log(`[bulkAssignLeads] raw=${rawCount} prelim=${prelim.length} inserted=${inserted.length} skipped=${skipped.length}`);
-  }
-
-  // Create partner-facing notifications grouped by assignedPartnerEmail
-  try {
-    const countsByEmail = inserted.reduce((acc, l) => {
-      if (l.assignedPartnerEmail) {
-        const key = l.assignedPartnerEmail.trim();
-        if (key) acc[key] = (acc[key] || 0) + 1;
-      }
-      return acc;
-    }, {});
-
-    const emails = Object.keys(countsByEmail);
-    for (const email of emails) {
-      try {
-        const emailRegex = buildEmailRegex(email.trim());
-        if (!emailRegex) continue;
-        const partner = await Partner.findOne({ email: { $regex: emailRegex } }, '_id name email');
-        if (partner) {
-          await NotificationService.createAdminAssignedLeadsNotification(partner._id, countsByEmail[email], { name: req.user?.name || 'Admin' });
+        // Convert Excel rows to objects with headers
+        if (rows.length > 0) {
+          const headers = rows[0];
+          rows = rows.slice(1).map(row => {
+            const rowData = {};
+            headers.forEach((header, index) => {
+              rowData[header] = row[index] !== undefined ? row[index] : null;
+            });
+            return rowData;
+          });
+          console.log(`Parsed ${rows.length} rows from Excel`);
+        } else {
+          console.log('No data rows in Excel file');
         }
-      } catch (innerErr) {
-        console.error('bulkAssignLeads: failed to notify partner for email', email, innerErr);
+      } else {
+        throw new Error('Unsupported file type. Only CSV and Excel (.xlsx, .xls) are allowed');
+      }
+    } finally {
+      // Clean up uploaded file
+      if (fs.existsSync(filePath)) {
+        console.log(`Cleaning up file: ${filePath}`);
+        fs.unlinkSync(filePath);
       }
     }
-  } catch (notifyGroupErr) {
-    console.error('bulkAssignLeads: group notification error', notifyGroupErr);
-  }
 
-  res.status(201).json({
-    success: true,
-    processed: rawCount,
-    prepared: prelim.length,
-    inserted: inserted.length,
-    skipped: skipped.length,
-    createdLeads: inserted,
-    ...(debug ? { skippedDetails: skipped.slice(0, 200) } : {})
-  });
-  } catch (e) {
-    res.status(500).json({ success: false, message: e.message });
+    // *** UPDATE: Explicit header mapping ***
+    const headerMap = {
+      'owner name': 'ownerName',
+      'owner_name': 'ownerName',
+      'ownername': 'ownerName',
+      'partner email': 'assignedPartnerEmail',
+      'partner_email': 'assignedPartnerEmail',
+      'assignedpartneremail': 'assignedPartnerEmail',
+      'registration no': 'registrationNo',
+      'registration_no': 'registrationNo',
+      'registrationno': 'registrationNo',
+      'registration date': 'registrationDate',
+      'registration_date': 'registrationDate',
+      'registrationdate': 'registrationDate',
+      'current address': 'currentAddress',
+      'current_address': 'currentAddress',
+      'currentaddress': 'currentAddress',
+      'engine number': 'engineNumber',
+      'engine_number': 'enginenumber',
+      'enginenumber': 'engineNumber',
+      'chassis number': 'chassisNumber',
+      'chassis_number': 'chassisnumber',
+      'chassisnumber': 'chassisNumber',
+      'vehicle maker': 'vehicleMaker',
+      'vehicle_maker': 'vehiclemaker',
+      'vehiclemaker': 'vehicleMaker',
+      'vehicle model': 'vehicleModel',
+      'vehicle_model': 'vehiclemodel',
+      'vehiclemodel': 'vehicleModel',
+      'vehicle class': 'vehicleClass',
+      'vehicle_class': 'vehicleclass',
+      'vehicleclass': 'vehicleClass',
+      'vehicle category': 'vehicleCategory',
+      'vehicle_category': 'vehiclecategory',
+      'vehiclecategory': 'vehicleCategory',
+      'fuel type': 'fuelType',
+      'fuel_type': 'fueltype',
+      'fueltype': 'fuelType',
+      'laden weight': 'ladenWeight',
+      'laden_weight': 'ladenweight',
+      'ladenweight': 'ladenWeight',
+      'sale amount': 'insuranceSaleAmount',
+      'sale_amount': 'insuranceSaleAmount',
+      'insurancesaleamount': 'insuranceSaleAmount',
+      'seat capacity': 'seatCapacity',
+      'seat_capacity': 'seatcapacity',
+      'seatcapacity': 'seatCapacity',
+      'owner mobile number': 'ownerMobileNumber',
+      'owner_mobile_number': 'ownermobilenumber',
+      'ownermobilenumber': 'ownerMobileNumber'
+    };
+
+    console.log('Processing rows for database insertion');
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      console.log(`Processing row ${index}:`, row);
+
+      // Normalize headers
+      const normalizedRow = {};
+      for (const key in row) {
+        if (!row.hasOwnProperty(key)) continue;
+        const lowerKey = key.toLowerCase().replace(/[\s_]+/g, ' ');
+        const mappedKey = headerMap[lowerKey] || key
+          .replace(/[\s_-]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
+          .replace(/^./, str => str.toLowerCase());
+        normalizedRow[mappedKey] = row[key] !== '' && row[key] !== undefined ? row[key] : null;
+      }
+      console.log(`Normalized row ${index}:`, normalizedRow);
+
+      // Validate required fields
+      if (!normalizedRow.ownerName || !normalizedRow.assignedPartnerEmail) {
+        console.log(`Skipping row ${index}: Missing ownerName or assignedPartnerEmail`);
+        skipped.push({ index, ...normalizedRow, reason: 'Missing ownerName or assignedPartnerEmail' });
+        continue;
+      }
+
+      // Map to partner
+      if (normalizedRow.assignedPartnerEmail) {
+        const partner = await Partner.findOne({ email: normalizedRow.assignedPartnerEmail });
+        if (partner) {
+          normalizedRow.assignedPartnerEmail = partner.email;
+          console.log(`Row ${index}: Matched partner ${partner.email}`);
+        } else {
+          normalizedRow.assignedPartnerEmail = null;
+          console.log(`Row ${index}: No partner found for ${normalizedRow.assignedPartnerEmail}`);
+        }
+      }
+
+      // Fill missing fields
+      const doc = {};
+      const schemaFields = Object.keys(AdminLead.schema.paths).filter(field => field !== '_id' && field !== '__v');
+      schemaFields.forEach(field => {
+        doc[field] = normalizedRow[field] !== undefined ? normalizedRow[field] : null;
+      });
+
+      try {
+        const lead = await AdminLead.create(doc);
+        inserted.push(lead);
+        console.log(`Row ${index}: Created lead with ID ${lead._id}`);
+      } catch (err) {
+        console.log(`Row ${index}: Failed to create lead - ${err.message}`);
+        skipped.push({ index, ...normalizedRow, reason: err.message });
+      }
+    }
+
+    console.log(`Bulk assign completed: ${inserted.length} inserted, ${skipped.length} skipped`);
+    res.status(201).json({
+      success: true,
+      inserted: inserted.length,
+      skipped: skipped.length,
+      createdLeads: inserted,
+      skippedDetails: skipped.slice(0, 200)
+    });
+  } catch (err) {
+    console.error('bulkAssignLeads error:', err.stack);
+    res.status(500).json({ success: false, message: err.message || 'Internal server error' });
   }
 };
+
+
+
+// ------------------- EDIT LEAD -------------------
+export const editLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const lead = await AdminLead.findByIdAndUpdate(id, updates, { new: true });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    res.status(200).json({ success: true, lead });
+  } catch (err) {
+    console.error('editLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ------------------- DELETE LEAD -------------------
+export const deleteLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const lead = await AdminLead.findByIdAndDelete(id);
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    res.status(200).json({ success: true, message: 'Lead deleted successfully' });
+  } catch (err) {
+    console.error('deleteLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ------------------- BULK DELETE LEADS -------------------
+export const bulkDeleteLeads = async (req, res) => {
+  try {
+    const { leadIds } = req.body; // expect an array of lead IDs
+
+    if (!Array.isArray(leadIds) || leadIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'leadIds must be a non-empty array' });
+    }
+
+    // Validate IDs
+    const validIds = leadIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (!validIds.length) {
+      return res.status(400).json({ success: false, message: 'No valid lead IDs provided' });
+    }
+
+    // Delete all leads
+    const result = await AdminLead.deleteMany({ _id: { $in: validIds } });
+
+    res.status(200).json({
+      success: true,
+      message: `${result.deletedCount} lead(s) deleted successfully`
+    });
+  } catch (err) {
+    console.error('bulkDeleteLeads error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 
 export const assignEarning = async (req, res) => {
   try {
-    const { leadId, earningType, rate, insuranceSaleAmount, lumpSumAmount, partnerEmail, tdsPercent } = req.body || {};
+    const { leadId, earningType, rate, insuranceSaleAmount, lumpSumAmount, partnerEmail } = req.body || {};
     if (!leadId) return res.status(400).json({ success: false, message: 'leadId is required' });
     if (!earningType || !['Percent', 'LumpSum'].includes(earningType)) {
       return res.status(400).json({ success: false, message: "earningType must be 'Percent' or 'LumpSum'" });
@@ -254,7 +369,7 @@ export const assignEarning = async (req, res) => {
     const lead = await AdminLead.findById(leadId);
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-  let computedEarning = 0;
+    let computedEarning = 0;
     if (earningType === 'Percent') {
       const r = Number(rate);
       const sale = Number(insuranceSaleAmount);
@@ -284,13 +399,6 @@ export const assignEarning = async (req, res) => {
 
     lead.earningType = earningType;
     lead.earningAmount = computedEarning;
-    // Persist TDS, default 10% if not provided
-    const tdsP = Number.isFinite(Number(tdsPercent)) ? Number(tdsPercent) : 10;
-    const tdsAmt = Math.max(0, Math.round((tdsP / 100) * computedEarning));
-    const net = Math.max(0, computedEarning - tdsAmt);
-    lead.tdsPercent = tdsP;
-    lead.tdsAmount = tdsAmt;
-    lead.netAfterTds = net;
 
     await lead.save();
     await AdminNotification.create({
@@ -304,16 +412,15 @@ export const assignEarning = async (req, res) => {
       ...lead.toObject(),
       insuranceSaleAmount: lead.insuranceSaleAmount,
       earningType: lead.earningType,
-      earningAmount: lead.earningAmount,
-      tdsPercent: lead.tdsPercent,
-      tdsAmount: lead.tdsAmount,
-      netAfterTds: lead.netAfterTds
+      earningAmount: lead.earningAmount
     } });
   } catch (e) {
     console.error('assignEarning error:', e);
     return res.status(500).json({ success: false, message: e.message });
   }
 };
+
+
 
 // Admin acknowledges or terminates a completed lead
 export const acknowledgeLeadByAdmin = async (req, res) => {
@@ -513,10 +620,7 @@ export const assignPartnerEarning = async (req, res) => {
         insuranceSaleAmount: adminLead.insuranceSaleAmount,
         rate: adminLead.rate,
         registrationNo: adminLead.registrationNo,
-        ownerName: adminLead.ownerName,
-        tdsPercent: adminLead.tdsPercent,
-        tdsAmount: adminLead.tdsAmount,
-        netAfterTds: adminLead.netAfterTds
+        ownerName: adminLead.ownerName
       }
     });
 
