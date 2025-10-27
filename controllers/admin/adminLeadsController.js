@@ -23,9 +23,12 @@ const buildEmailRegex = (email) => {
 };
 // No longer using admin-dashboard DB for insurance leads; use local AdminLead model
 
+
+// Backend API Update (getAllLeads function)
 export const getAllLeads = async (_req, res) => {
   try {
-    const leads = await AdminLead.find().sort({ createdAt: -1 }).limit(1000).lean();
+    // Removed .limit(1000) to fetch all documents
+    const leads = await AdminLead.find().sort({ createdAt: -1 }).lean();
     const ids = leads.map(l => l._id).filter(Boolean);
     const idStrs = ids.map(id => String(id));
     let earningsByLead = new Set();
@@ -75,6 +78,7 @@ export const getAllLeads = async (_req, res) => {
     res.status(500).json({ success: false, message: e.message });
   }
 };
+
 
 // ------------------- CREATE OR ASSIGN SINGLE LEAD -------------------
 export const createOrAssignLead = async (req, res) => {
