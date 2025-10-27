@@ -14,21 +14,20 @@ import multer from 'multer';
 // Configure multer for file uploads
 const upload = multer({ dest: 'uploads/' });
 
-// @desc    Get all leads with filtering, sorting, and pagination
+// @desc    Get all leads with filtering, sorting and pagination
 // @route   GET /api/leads
 // @access  Private
 export const getLeads = async (req, res) => {
   try {
     const {
       page = 1,
-      limit = 100, // Increased default limit
+      limit = 10,
       sort = '-createdAt',
       status,
       priority,
       leadSource,
       leadType,
       assignedPartner,
-      adminAcknowledged, // New query parameter
       search,
       dateFrom,
       dateTo
@@ -37,12 +36,11 @@ export const getLeads = async (req, res) => {
     // Build filter object
     const filter = {};
     
-    if (status) filter.status = { $regex: status, $options: 'i' }; // Case-insensitive status filter
+    if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (leadSource) filter.leadSource = leadSource;
     if (leadType) filter.leadType = leadType;
     if (assignedPartner) filter.assignedPartner = assignedPartner;
-    if (adminAcknowledged !== undefined) filter.adminAcknowledged = adminAcknowledged === 'true'; // Filter by adminAcknowledged
     
     // Date range filter
     if (dateFrom || dateTo) {
@@ -73,7 +71,7 @@ export const getLeads = async (req, res) => {
       .populate('createdBy', 'name email companyName')
       .sort(sort)
       .skip(skip)
-      .limit(parseInt(limit) || 0); // Allow all documents if limit=0
+      .limit(parseInt(limit));
 
     const total = await Lead.countDocuments(filter);
 
@@ -83,8 +81,8 @@ export const getLeads = async (req, res) => {
       total,
       pagination: {
         page: parseInt(page),
-        limit: parseInt(limit) || total, // Use total if no limit
-        pages: Math.ceil(total / (parseInt(limit) || total))
+        limit: parseInt(limit),
+        pages: Math.ceil(total / limit)
       },
       data: leads
     });
@@ -96,9 +94,6 @@ export const getLeads = async (req, res) => {
     });
   }
 };
-
-
-
 
 // @desc    Get single lead
 // @route   GET /api/leads/:id
