@@ -25,15 +25,10 @@ const buildEmailRegex = (email) => {
 
 export const getAllLeads = async (_req, res) => {
   try {
-    // Remove .limit(1000) – return every document
-    const leads = await AdminLead.find()
-      .sort({ createdAt: -1 })
-      .lean();
-
+    const leads = await AdminLead.find().sort({ createdAt: -1 }).limit(1000).lean();
     const ids = leads.map(l => l._id).filter(Boolean);
     const idStrs = ids.map(id => String(id));
     let earningsByLead = new Set();
-
     if (ids.length) {
       const earnings = await Earning.find({
         $or: [
@@ -41,24 +36,39 @@ export const getAllLeads = async (_req, res) => {
           { 'metadata.adminLeadId': { $in: idStrs } }
         ]
       }, 'metadata.adminLeadId').lean();
-
       earningsByLead = new Set(earnings.map(e => String(e?.metadata?.adminLeadId)));
     }
-
     const withFlags = leads.map(l => ({
       ...l,
       hasPartnerEarning: earningsByLead.has(String(l._id)),
-      earningAssigned: typeof l.earningAssigned === 'boolean'
-        ? l.earningAssigned
-        : earningsByLead.has(String(l._id))
+      earningAssigned: typeof l.earningAssigned === 'boolean' ? l.earningAssigned : earningsByLead.has(String(l._id))
     }));
 
-    // …stats & top-partners calculation unchanged…
+    // Derive stats similar to legacy adminController version
+    const totalCompleted = withFlags.filter(l => l.status === 'Completed').length;
+    const totalTerminated = withFlags.filter(l => ['Terminated','Not Interested'].includes(l.status)).length;
+    const totalPendingContacted = withFlags.filter(l => ['Pending','Contacted','Interested'].includes(l.status)).length;
+
+    // Compute top partners by Completed leads
+    const partnerCompleted = {};
+    withFlags.forEach(l => {
+      if (l.status === 'Completed' && l.assignedPartnerEmail) {
+        partnerCompleted[l.assignedPartnerEmail] = (partnerCompleted[l.assignedPartnerEmail] || 0) + 1;
+      }
+    });
+    const topPartners = Object.entries(partnerCompleted)
+      .map(([email, completedLeads]) => ({ partnerEmail: email, completedLeads }))
+      .sort((a,b) => b.completedLeads - a.completedLeads)
+      .slice(0,5);
 
     res.json({
       success: true,
       leads: withFlags,
-      stats: { /* … */ },
+      stats: {
+        totalCompleted,
+        totalTerminated,
+        totalPendingContacted
+      },
       topPartners
     });
   } catch (e) {
