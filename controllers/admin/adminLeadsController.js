@@ -360,7 +360,7 @@ export const bulkDeleteLeads = async (req, res) => {
 
 export const assignEarning = async (req, res) => {
   try {
-    const { leadId, earningType, rate, insuranceSaleAmount, lumpSumAmount, partnerEmail } = req.body || {};
+    const { leadId, earningType, rate, insuranceSaleAmount, lumpSumAmount, partnerEmail, tdsPercent } = req.body || {};
     if (!leadId) return res.status(400).json({ success: false, message: 'leadId is required' });
     if (!earningType || !['Percent', 'LumpSum'].includes(earningType)) {
       return res.status(400).json({ success: false, message: "earningType must be 'Percent' or 'LumpSum'" });
@@ -369,7 +369,7 @@ export const assignEarning = async (req, res) => {
     const lead = await AdminLead.findById(leadId);
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    let computedEarning = 0;
+  let computedEarning = 0;
     if (earningType === 'Percent') {
       const r = Number(rate);
       const sale = Number(insuranceSaleAmount);
@@ -399,6 +399,13 @@ export const assignEarning = async (req, res) => {
 
     lead.earningType = earningType;
     lead.earningAmount = computedEarning;
+    // Persist TDS, default 10% if not provided
+    const tdsP = Number.isFinite(Number(tdsPercent)) ? Number(tdsPercent) : 10;
+    const tdsAmt = Math.max(0, Math.round((tdsP / 100) * computedEarning));
+    const net = Math.max(0, computedEarning - tdsAmt);
+    lead.tdsPercent = tdsP;
+    lead.tdsAmount = tdsAmt;
+    lead.netAfterTds = net;
 
     await lead.save();
     await AdminNotification.create({
@@ -412,14 +419,16 @@ export const assignEarning = async (req, res) => {
       ...lead.toObject(),
       insuranceSaleAmount: lead.insuranceSaleAmount,
       earningType: lead.earningType,
-      earningAmount: lead.earningAmount
+      earningAmount: lead.earningAmount,
+      tdsPercent: lead.tdsPercent,
+      tdsAmount: lead.tdsAmount,
+      netAfterTds: lead.netAfterTds
     } });
   } catch (e) {
     console.error('assignEarning error:', e);
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-
 
 
 // Admin acknowledges or terminates a completed lead
@@ -620,7 +629,10 @@ export const assignPartnerEarning = async (req, res) => {
         insuranceSaleAmount: adminLead.insuranceSaleAmount,
         rate: adminLead.rate,
         registrationNo: adminLead.registrationNo,
-        ownerName: adminLead.ownerName
+        ownerName: adminLead.ownerName,
+        tdsPercent: adminLead.tdsPercent,
+        tdsAmount: adminLead.tdsAmount,
+        netAfterTds: adminLead.netAfterTds
       }
     });
 
