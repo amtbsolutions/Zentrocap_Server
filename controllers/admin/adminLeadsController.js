@@ -6,6 +6,15 @@ import AdminLead from '../../models/admin/AdminLead.js';
 import AdminNotification from '../../models/admin/AdminNotification.js';
 import NotificationService from '../../services/NotificationService.js';
 
+//*************************************
+import { parse } from '@fast-csv/parse';
+import XLSX from 'xlsx';
+import mongoose from 'mongoose';
+import path from 'path'; // *** UPDATE: Added for file extension checking ***
+import fs from 'fs'; // *** UPDATE: Added for file cleanup ***
+
+
+
 // Helper to safely build a case-insensitive exact-match email regex
 const buildEmailRegex = (email) => {
   if (!email || typeof email !== 'string') return null;
@@ -289,9 +298,69 @@ export const bulkAssignLeads = async (req, res) => {
 };
 
 
+
+// ------------------- EDIT LEAD -------------------
+export const editLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const lead = await AdminLead.findByIdAndUpdate(id, updates, { new: true });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    res.status(200).json({ success: true, lead });
+  } catch (err) {
+    console.error('editLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ------------------- DELETE LEAD -------------------
+export const deleteLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const lead = await AdminLead.findByIdAndDelete(id);
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    res.status(200).json({ success: true, message: 'Lead deleted successfully' });
+  } catch (err) {
+    console.error('deleteLead error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+// ------------------- BULK DELETE LEADS -------------------
+export const bulkDeleteLeads = async (req, res) => {
+  try {
+    const { leadIds } = req.body; // expect an array of lead IDs
+
+    if (!Array.isArray(leadIds) || leadIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'leadIds must be a non-empty array' });
+    }
+
+    // Validate IDs
+    const validIds = leadIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (!validIds.length) {
+      return res.status(400).json({ success: false, message: 'No valid lead IDs provided' });
+    }
+
+    // Delete all leads
+    const result = await AdminLead.deleteMany({ _id: { $in: validIds } });
+
+    res.status(200).json({
+      success: true,
+      message: `${result.deletedCount} lead(s) deleted successfully`
+    });
+  } catch (err) {
+    console.error('bulkDeleteLeads error:', err.stack);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+
 export const assignEarning = async (req, res) => {
   try {
-    const { leadId, earningType, rate, insuranceSaleAmount, lumpSumAmount, partnerEmail, tdsPercent } = req.body || {};
+    const { leadId, earningType, rate, insuranceSaleAmount, lumpSumAmount, partnerEmail } = req.body || {};
     if (!leadId) return res.status(400).json({ success: false, message: 'leadId is required' });
     if (!earningType || !['Percent', 'LumpSum'].includes(earningType)) {
       return res.status(400).json({ success: false, message: "earningType must be 'Percent' or 'LumpSum'" });
@@ -300,7 +369,7 @@ export const assignEarning = async (req, res) => {
     const lead = await AdminLead.findById(leadId);
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-  let computedEarning = 0;
+    let computedEarning = 0;
     if (earningType === 'Percent') {
       const r = Number(rate);
       const sale = Number(insuranceSaleAmount);
@@ -330,13 +399,6 @@ export const assignEarning = async (req, res) => {
 
     lead.earningType = earningType;
     lead.earningAmount = computedEarning;
-    // Persist TDS, default 10% if not provided
-    const tdsP = Number.isFinite(Number(tdsPercent)) ? Number(tdsPercent) : 10;
-    const tdsAmt = Math.max(0, Math.round((tdsP / 100) * computedEarning));
-    const net = Math.max(0, computedEarning - tdsAmt);
-    lead.tdsPercent = tdsP;
-    lead.tdsAmount = tdsAmt;
-    lead.netAfterTds = net;
 
     await lead.save();
     await AdminNotification.create({
@@ -350,16 +412,15 @@ export const assignEarning = async (req, res) => {
       ...lead.toObject(),
       insuranceSaleAmount: lead.insuranceSaleAmount,
       earningType: lead.earningType,
-      earningAmount: lead.earningAmount,
-      tdsPercent: lead.tdsPercent,
-      tdsAmount: lead.tdsAmount,
-      netAfterTds: lead.netAfterTds
+      earningAmount: lead.earningAmount
     } });
   } catch (e) {
     console.error('assignEarning error:', e);
     return res.status(500).json({ success: false, message: e.message });
   }
 };
+
+
 
 // Admin acknowledges or terminates a completed lead
 export const acknowledgeLeadByAdmin = async (req, res) => {
@@ -559,10 +620,7 @@ export const assignPartnerEarning = async (req, res) => {
         insuranceSaleAmount: adminLead.insuranceSaleAmount,
         rate: adminLead.rate,
         registrationNo: adminLead.registrationNo,
-        ownerName: adminLead.ownerName,
-        tdsPercent: adminLead.tdsPercent,
-        tdsAmount: adminLead.tdsAmount,
-        netAfterTds: adminLead.netAfterTds
+        ownerName: adminLead.ownerName
       }
     });
 
@@ -580,64 +638,5 @@ export const assignPartnerEarning = async (req, res) => {
   } catch (e) {
     console.error('assignPartnerEarning error:', e);
     return res.status(500).json({ success: false, message: e.message });
-  }
-};
-
-
-// ------------------- EDIT LEAD -------------------
-export const editLead = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-
-    const lead = await AdminLead.findByIdAndUpdate(id, updates, { new: true });
-    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-
-    res.status(200).json({ success: true, lead });
-  } catch (err) {
-    console.error('editLead error:', err.stack);
-    res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-};
-
-// ------------------- DELETE LEAD -------------------
-export const deleteLead = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const lead = await AdminLead.findByIdAndDelete(id);
-    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-
-    res.status(200).json({ success: true, message: 'Lead deleted successfully' });
-  } catch (err) {
-    console.error('deleteLead error:', err.stack);
-    res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-};
-
-// ------------------- BULK DELETE LEADS -------------------
-export const bulkDeleteLeads = async (req, res) => {
-  try {
-    const { leadIds } = req.body; // expect an array of lead IDs
-
-    if (!Array.isArray(leadIds) || leadIds.length === 0) {
-      return res.status(400).json({ success: false, message: 'leadIds must be a non-empty array' });
-    }
-
-    // Validate IDs
-    const validIds = leadIds.filter(id => mongoose.Types.ObjectId.isValid(id));
-    if (!validIds.length) {
-      return res.status(400).json({ success: false, message: 'No valid lead IDs provided' });
-    }
-
-    // Delete all leads
-    const result = await AdminLead.deleteMany({ _id: { $in: validIds } });
-
-    res.status(200).json({
-      success: true,
-      message: `${result.deletedCount} lead(s) deleted successfully`
-    });
-  } catch (err) {
-    console.error('bulkDeleteLeads error:', err.stack);
-    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
