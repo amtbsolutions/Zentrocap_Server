@@ -25,54 +25,131 @@ const buildEmailRegex = (email) => {
 
 
 // Backend API Update (getAllLeads function)
-export const getAllLeads = async (_req, res) => {
+export const getAllLeads = async (req, res) => {
   try {
-    // Removed .limit(1000) to fetch all documents
-    const leads = await AdminLead.find().sort({ createdAt: -1 }).lean();
-    const ids = leads.map(l => l._id).filter(Boolean);
-    const idStrs = ids.map(id => String(id));
+    const { page = 1, limit = 100, status, search } = req.query;
+    const query = {};
+
+    // Apply status filter if provided
+    if (status) {
+      if (status === "pending") {
+        query.status = { $in: ["", null, "Pending"] };
+      } else if (status === "inProgress") {
+        query.status = { $nin: ["", null, "Pending", "Completed"] };
+      } else if (status === "completedPending") {
+        query.status = "Completed";
+        query.adminAcknowledged = false;
+      } else if (status === "approved") {
+        query.status = "Completed";
+        query.adminAcknowledged = true;
+      } else if (status === "sales") {
+        query.status = "Completed";
+        query.earningAmount = { $gt: 0 };
+      } else {
+        query.status = status; // Exact match for other statuses
+      }
+    }
+
+    // Apply search filter if provided
+    if (search) {
+      const searchRegex = new RegExp(search, "i");
+      query.$or = [
+        { registrationNo: searchRegex },
+        { ownerName: searchRegex },
+        { currentAddress: searchRegex },
+        { engineNumber: searchRegex },
+        { chassisNumber: searchRegex },
+        { vehicleMaker: searchRegex },
+        { vehicleModel: searchRegex },
+        { vehicleClass: searchRegex },
+        { vehicleCategory: searchRegex },
+        { fuelType: searchRegex },
+        { state: searchRegex },
+        { city: searchRegex },
+        { ownerMobileNumber: searchRegex },
+        { assignedPartnerEmail: searchRegex },
+      ];
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Fetch leads with pagination
+    const leads = await AdminLead.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    // Get total count for pagination
+    const totalLeads = await AdminLead.countDocuments(query);
+
+    // Fetch earnings for the leads in the current page
+    const ids = leads.map((l) => l._id).filter(Boolean);
+    const idStrs = ids.map((id) => String(id));
     let earningsByLead = new Set();
     if (ids.length) {
-      const earnings = await Earning.find({
-        $or: [
-          { 'metadata.adminLeadId': { $in: ids } },
-          { 'metadata.adminLeadId': { $in: idStrs } }
-        ]
-      }, 'metadata.adminLeadId').lean();
-      earningsByLead = new Set(earnings.map(e => String(e?.metadata?.adminLeadId)));
+      const earnings = await Earning.find(
+        {
+          $or: [
+            { "metadata.adminLeadId": { $in: ids } },
+            { "metadata.adminLeadId": { $in: idStrs } },
+          ],
+        },
+        "metadata.adminLeadId"
+      ).lean();
+      earningsByLead = new Set(earnings.map((e) => String(e?.metadata?.adminLeadId)));
     }
-    const withFlags = leads.map(l => ({
+
+    const withFlags = leads.map((l) => ({
       ...l,
       hasPartnerEarning: earningsByLead.has(String(l._id)),
-      earningAssigned: typeof l.earningAssigned === 'boolean' ? l.earningAssigned : earningsByLead.has(String(l._id))
+      earningAssigned:
+        typeof l.earningAssigned === "boolean"
+          ? l.earningAssigned
+          : earningsByLead.has(String(l._id)),
     }));
 
-    // Derive stats similar to legacy adminController version
-    const totalCompleted = withFlags.filter(l => l.status === 'Completed').length;
-    const totalTerminated = withFlags.filter(l => ['Terminated','Not Interested'].includes(l.status)).length;
-    const totalPendingContacted = withFlags.filter(l => ['Pending','Contacted','Interested'].includes(l.status)).length;
+    // Compute stats for the dashboard
+    const statsQuery = {};
+    const totalCompleted = await AdminLead.countDocuments({
+      ...statsQuery,
+      status: "Completed",
+    });
+    const totalTerminated = await AdminLead.countDocuments({
+      ...statsQuery,
+      status: { $in: ["Terminated", "Not Interested"] },
+    });
+    const totalPendingContacted = await AdminLead.countDocuments({
+      ...statsQuery,
+      status: { $in: ["Pending", "Contacted", "Interested"] },
+    });
 
     // Compute top partners by Completed leads
-    const partnerCompleted = {};
-    withFlags.forEach(l => {
-      if (l.status === 'Completed' && l.assignedPartnerEmail) {
-        partnerCompleted[l.assignedPartnerEmail] = (partnerCompleted[l.assignedPartnerEmail] || 0) + 1;
-      }
-    });
-    const topPartners = Object.entries(partnerCompleted)
-      .map(([email, completedLeads]) => ({ partnerEmail: email, completedLeads }))
-      .sort((a,b) => b.completedLeads - a.completedLeads)
-      .slice(0,5);
+    const partnerCompleted = await AdminLead.aggregate([
+      { $match: { status: "Completed", assignedPartnerEmail: { $ne: null } } },
+      {
+        $group: {
+          _id: "$assignedPartnerEmail",
+          completedLeads: { $sum: 1 },
+        },
+      },
+      { $sort: { completedLeads: -1 } },
+      { $limit: 5 },
+      { $project: { partnerEmail: "$_id", completedLeads: 1, _id: 0 } },
+    ]);
 
     res.json({
       success: true,
       leads: withFlags,
+      totalLeads,
       stats: {
         totalCompleted,
         totalTerminated,
-        totalPendingContacted
+        totalPendingContacted,
       },
-      topPartners
+      topPartners: partnerCompleted,
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
