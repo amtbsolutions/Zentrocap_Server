@@ -301,7 +301,7 @@ export const register = async (req, res) => {
       pincode,
       aadhaarNumber,
       panNumber,
-      gstNumber: entityType === 'company' ? (req.body.gstNumber?.trim() || null) : null,
+      gstNumber: entityType === 'company' ? (req.body.gstNumber || '') : '',
       experience,
       specialization,
       // Don't set referralCode here - let the Partner model generate unique one
@@ -618,7 +618,7 @@ export const registerPartner = async (req, res) => {
       pincode,
       aadhaarNumber,
       panNumber,
-      gstNumber: entityType === 'company' ? (req.body.gstNumber?.trim() || null) : null,
+      gstNumber: gstNumber || '',
       experience,
       specialization,
       // Don't set referralCode here - let the Partner model generate unique one
