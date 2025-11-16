@@ -88,8 +88,8 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 app.use(cookieParser());
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
 // API Routes
 app.use('/api/auth', authRoutes);
